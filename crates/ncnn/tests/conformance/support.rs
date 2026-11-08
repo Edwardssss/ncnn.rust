@@ -1,6 +1,6 @@
 //! Fixtures and helpers shared by the conformance suite.
 
-use ncnn_rust::{Mat, Net, NetBuilder, Result};
+use ncnn_rust::{Mat, Net, NetBuilder, OptionFlag, Result};
 
 /// A deterministic ramp that covers negative, zero and positive values.
 pub fn ramp(count: usize) -> Vec<f32> {
@@ -51,14 +51,35 @@ pub fn graph_with(
     configure: impl FnOnce(NetBuilder) -> Result<NetBuilder>,
 ) -> Net {
     let text = format!("7767517\n{layers} {blobs}\n{body}");
-    let builder = Net::builder()
-        .expect("builder")
-        .threads(1)
-        .expect("threads");
-    configure(builder)
+    configure(fp32_pipeline())
         .expect("configure")
         .load_bytes(&text, weights)
         .expect("load")
+}
+
+/// Pins a single-threaded FP32 pipeline.
+///
+/// Native ncnn enables FP16 storage and arithmetic by default on ARM64 and Apple
+/// Silicon, which would round every result to FP16 before the reference comparison.
+/// The conformance suite states one numeric contract, so the tests disable those
+/// presets explicitly and `packing_and_fp16_options_preserve_values` covers the
+/// non-default pipelines separately.
+fn fp32_pipeline() -> NetBuilder {
+    let mut builder = Net::builder()
+        .expect("builder")
+        .threads(1)
+        .expect("threads");
+    for flag in [
+        OptionFlag::Fp16Packed,
+        OptionFlag::Fp16Storage,
+        OptionFlag::Fp16Arithmetic,
+        OptionFlag::Bf16Packed,
+        OptionFlag::Bf16Storage,
+        OptionFlag::Packing,
+    ] {
+        builder = builder.flag(flag, false).expect("flag");
+    }
+    builder
 }
 
 /// Builds one operator between `input` and `output`.

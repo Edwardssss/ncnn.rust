@@ -90,6 +90,10 @@ wrapper regressions without a second backend.
   multi-output topologies, plus repeated-run determinism and packing/FP16 option parity.
 - `allocation.rs` asserts that the reusable-buffer path allocates nothing once warm.
 
+Native ncnn enables FP16 packed, storage and arithmetic by default on ARM64 and Apple Silicon, so
+results there round to FP16 before any comparison. The conformance suite pins a single-threaded
+FP32 pipeline and leaves the non-default pipelines to `packing_and_fp16_options_preserve_values`.
+
 Weights use two block forms because ncnn reads `type = 0` blocks with a leading zero tag and
 `type = 1` blocks without one; `support.rs` provides both constructors. Layers that require an
 external blob, such as `CopyTo`, stay out of the suite because a single-input graph does not
