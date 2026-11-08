@@ -36,7 +36,9 @@ Required native features: `NCNN_C_API`, `NCNN_STDIO`, `NCNN_STRING`, `NCNN_PIXEL
 `NCNN_BF16`, `NCNN_VALIDATION`. The default build requires `NCNN_VULKAN=OFF`; the `vulkan`
 Cargo feature requires `NCNN_VULKAN=ON` and a shared SDK with its dependency closure.
 
-`NCNN_LINK_KIND` selects `static` (default) or `dylib`. `NCNN_EXTRA_LIBS` lists additional
+`NCNN_LINK_KIND` selects `static` (default) or `dylib`. A shared SDK also needs its `lib`
+directory on the runtime loader path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`) or on `PATH` on
+Windows. `NCNN_EXTRA_LIBS` lists additional
 libraries in link order, optionally prefixed with `static=` or `dylib=`. `NCNN_EXTRA_LIB_DIRS` adds
 search directories. The SDK version is pinned to 20261020; `NCNN_ALLOW_UNTESTED_VERSION=1` builds
 against another release for compatibility checks.

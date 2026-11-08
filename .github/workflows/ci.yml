@@ -84,10 +84,17 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The shared SDK lives outside the default loader path; Windows gets it from PATH.
       - name: Test
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+          DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo test --workspace
 
       - name: Example
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+          DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo run -p ncnn-rust --example add
 
       - name: Version consistency
