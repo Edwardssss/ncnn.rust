@@ -11,7 +11,11 @@ const HEIGHT: usize = 6;
 const CHANNELS: usize = 1;
 
 fn bounded() -> Vec<f32> {
-    (0..WIDTH * HEIGHT).map(|i| i as f32 * 0.1 - 3.0).collect()
+    // The half-step keeps every sample away from an exact zero: division by zero and
+    // pow with a zero base are not portable across the native scalar and vector paths.
+    (0..WIDTH * HEIGHT)
+        .map(|i| (i as f32 + 0.5) * 0.1 - 3.0)
+        .collect()
 }
 
 #[test]
