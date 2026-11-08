@@ -44,7 +44,7 @@ jobs:
           echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
 
       - name: Cache SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/ncnn-${{ matrix.version }}
           key: ncnn-${{ matrix.version }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/patches/*.patch') }}

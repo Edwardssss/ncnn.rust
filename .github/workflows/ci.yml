@@ -26,7 +26,7 @@ jobs:
 
       - name: Cache ncnn SDK
         id: sdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-${{ matrix.os }}-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
@@ -118,7 +118,7 @@ jobs:
           toolchain: "1.85.1"
 
       - name: Cache ncnn SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-msrv-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
@@ -150,7 +150,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache ncnn SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-arm64-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
@@ -196,7 +196,7 @@ jobs:
           echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Cache ncnn Vulkan SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-vulkan-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}

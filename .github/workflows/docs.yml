@@ -31,7 +31,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache ncnn SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-docs-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/patches/*.patch') }}
