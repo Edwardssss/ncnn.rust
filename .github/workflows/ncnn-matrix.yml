@@ -20,7 +20,7 @@ jobs:
     outputs:
       versions: ${{ steps.plan.outputs.versions }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Resolve version plan
         id: plan
         run: python3 tools/ncnn-versions.py >> "$GITHUB_OUTPUT"
@@ -34,7 +34,7 @@ jobs:
       matrix:
         version: ${{ fromJSON(needs.resolve.outputs.versions) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install toolchain
@@ -88,7 +88,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Summarise
         run: |
           echo "## ncnn version matrix" >> "$GITHUB_STEP_SUMMARY"
