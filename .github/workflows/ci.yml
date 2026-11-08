@@ -36,7 +36,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang clang-format libclang-dev
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Install toolchain (macOS)
         if: runner.os == 'macOS'
@@ -125,7 +127,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang libclang-dev
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Fetch and build ncnn
         run: |
@@ -155,7 +159,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang libclang-dev
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Fetch and build ncnn
         run: |
@@ -184,8 +190,10 @@ jobs:
       - name: Install toolchain and software Vulkan
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev glslang-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          sudo apt-get install -y cmake clang libclang-dev glslang-dev glslang-tools libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Cache ncnn Vulkan SDK
         uses: actions/cache@v4

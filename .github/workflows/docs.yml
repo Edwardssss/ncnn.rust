@@ -39,8 +39,10 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev glslang-dev libvulkan-dev
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          sudo apt-get install -y cmake clang libclang-dev glslang-dev glslang-tools libvulkan-dev
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       # The documented build enables the vulkan feature, so the SDK must enable it too.
       - name: Fetch and build ncnn
