@@ -12,6 +12,7 @@ the evidence appendix.
 | [model-fixtures.md](model-fixtures.md) | Which trained models are compared, with commands and numeric results | Fixtures, comparisons or their commands change |
 | [evidence-history.md](evidence-history.md) | Dated campaign records: machines, counts, defects found | A new validation campaign lands |
 | GitHub Releases | User-visible changes per release, generated from Conventional Commit subjects | Created when a tag is published |
+| <https://edwardssss.github.io/ncnn.rust/ncnn_rust/> | Generated API reference | Automatically, on every push to the default branch |
 
 ## Writing rules
 

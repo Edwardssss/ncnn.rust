@@ -98,10 +98,13 @@ GitHub-hosted runners cover these configurations without additional hardware:
 | macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
 | Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1 |
 | Vulkan | `ubuntu-latest` | Vulkan contracts against Mesa lavapipe (`llvmpipe`) |
-| API documentation | `ubuntu-latest` | `cargo doc --workspace --no-deps` with a built SDK, deployed to GitHub Pages |
+| API documentation | `ubuntu-latest` | `cargo doc --workspace --no-deps` with a built SDK, deployed to <https://edwardssss.github.io/ncnn.rust/> |
+
+The first hosted run of this matrix passed every job on 2026-11-09 for commit `f3bf72b`: Linux
+x86-64, Linux ARM64, Windows, both macOS images, the minimum Rust version and software Vulkan.
 
 Hosted runners expose no GPU, so the Vulkan job covers correctness and lifetime contracts on a
 software device. Timing, memory-type selection and driver behavior on discrete hardware remain
-local evidence. That job takes glslang from distro packages; the first hosted run confirms that
-those packages export the CMake targets ncnn expects, and a local glslang build is the fallback.
+local evidence. That job takes glslang and its CMake targets from `glslang-dev` plus `glslang-tools`,
+which the hosted image provides.
 Windows ARM64 uses the preview `windows-11-arm` label and stays outside this matrix.
