@@ -1,0 +1,19 @@
+# Cargo build output
+/target/
+
+# Pinned ncnn source, fetched and verified by tools/fetch-ncnn.py
+/vendor/
+
+# Local build and benchmark artifacts live in the sibling local directory,
+# outside this repository.
+
+# Python bytecode from the tool scripts
+__pycache__/
+*.pyc
+
+# Editor and toolchain scratch output
+*.log
+*.pdb
+*.dSYM/
+.DS_Store
+Thumbs.db

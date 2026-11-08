@@ -1,0 +1,107 @@
+# Platform support
+
+CPU is the default backend. Vulkan is optional and requires a matching SDK and driver. Every
+target consumes an externally installed ncnn 20261020 SDK; the build script rejects other versions
+unless `NCNN_ALLOW_UNTESTED_VERSION=1` is set. Dated campaign results, machine details and
+reproduction logs live in the [evidence history](evidence-history.md).
+
+## ncnn version matrix
+
+`ci/ncnn-versions.json` holds the pinned release and the dynamic entries the scheduled workflow
+resolves at run time. `.github/workflows/ncnn-matrix.yml` builds each version, runs the workspace
+tests, audits enabled C API declarations against generated bindings and defined symbols, and
+compares trained-model output with a native C++ reference built from the same SDK.
+
+| Entry | Resolution | Requirement |
+|---|---|---|
+| `pinned` | `20261020` | Must pass |
+| `latest` | Newest ncnn tag | Reported each run |
+| `previous` | Next distinct tag below the newest | Reported each run |
+
+A matrix failure opens or updates a tracking issue.
+
+## Targets
+
+The adapter compiles for the Cargo target; bindgen runs on the host with the target triple and
+target headers, and `cc` selects the target C++ runtime. CPU inference, tensors, loading and
+ownership interfaces are identical on every target.
+
+| Target | Implementation | Validated on |
+|---|---|---|
+| Linux x86-64 GNU | Static and shared SDKs, simpleomp or system OpenMP | Physical hardware, native CPU and Vulkan tests |
+| Linux ARM64 GNU | Target compiler and sysroot, ARM feature queries, Linux topology | QEMU user emulation; native runner in CI |
+| Windows x86-64 MSVC | `/MD` and `/MT`, static and shared SDKs, processor groups | Physical hardware, native CPU and Vulkan tests |
+| macOS x86-64 | `.a` and `.dylib`, libc++, physical-core query, no exact affinity | `macos-15-intel` CI job |
+| macOS ARM64 | ARM feature queries, `.a` and `.dylib`, libc++, no exact affinity | `macos-15` CI job |
+| Windows ARM64 MSVC | Accepted with a matching SDK and toolchain | Not validated |
+
+## OS extensions
+
+`supports_thread_affinity` reports exact mask support. Linux exposes kernel CPU IDs and
+dynamically sized masks, Windows exposes group and index identities, and macOS reports
+`Error::Unsupported` for exact processor IDs while providing `sysctl` physical-core counts.
+Native affinity tags and exact CPU binding have different semantics; the portable core works
+independently of both.
+
+Native precision options keep upstream behavior. The model runner compares actual intermediate
+formats with C++ rather than requiring the x86 FP16 fallback on every architecture. Unsafe
+standalone-layer tests select FP32 pipelines when supplying FP32 tensors directly; network
+execution performs native layout and precision conversion.
+
+## Vulkan
+
+A Vulkan build needs an SDK built with `-DNCNN_VULKAN=ON` and a working driver. The Cargo feature
+and the SDK setting must agree; both mismatch directions fail during the build. SDKs built by
+`tools/build-ncnn-sdk.py` also carry the patches in `tools/patches/`, which the validated results
+assume.
+
+Static linking is the default; `NCNN_LINK_KIND=dylib` selects shared linking. Static Vulkan needs the explicit dependency closure, for example
+`static=glslang,static=SPIRV` or the extended closure in the evidence history; the ncnn source tree
+ships no glslang, so the SDK is built with system glslang or the SDK's exported targets. Missing,
+delimiter-only or wrongly typed dependencies fail before linking.
+
+Networks select a device before loading parameters and keep native per-layer CPU fallback, so
+Vulkan selection is not an all-GPU guarantee. Evidence for Windows/NVIDIA, Debian WSL lavapipe and
+the trained-model comparisons is recorded in the [evidence history](evidence-history.md) and
+[model fixtures](model-fixtures.md#windows-vulkan-trained-model-evidence).
+
+## Cross execution
+
+A Linux ARM64 host needs `aarch64-linux-gnu-g++`, the GNU ARM64 sysroot, QEMU user emulation and
+Rust's `aarch64-unknown-linux-gnu` target:
+
+```sh
+export NCNN_INSTALL_DIR=/absolute/path/to/arm64-ncnn-install
+export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER='qemu-aarch64 -L /usr/aarch64-linux-gnu'
+export BINDGEN_EXTRA_CLANG_ARGS='-idirafter /usr/aarch64-linux-gnu/include'
+export QEMU_CPU=max
+cargo test --workspace --target aarch64-unknown-linux-gnu
+```
+
+A relocated toolchain also supplies its compiler sysroot and host tool-library paths. QEMU
+validates ABI, ownership, numeric behavior and instruction paths; its timing and `/proc` topology
+reflect the emulator, so native ARM performance remains real-device work. The `ubuntu-24.04-arm`
+CI job covers the native ARM64 build and test run.
+
+## Hosted CI coverage
+
+GitHub-hosted runners cover these configurations without additional hardware:
+
+| Configuration | Runner | What the job proves |
+|---|---|---|
+| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, workspace tests, example, package verification |
+| Windows x86-64 CPU | `windows-latest` | MSVC build, workspace tests, example, package verification |
+| Linux ARM64 CPU | `ubuntu-24.04-arm` | Native workspace tests |
+| macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
+| macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
+| Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1 |
+| Vulkan | `ubuntu-latest` | Vulkan contracts against Mesa lavapipe (`llvmpipe`) |
+| API documentation | `ubuntu-latest` | `cargo doc --workspace --no-deps` with a built SDK, deployed to GitHub Pages |
+
+Hosted runners expose no GPU, so the Vulkan job covers correctness and lifetime contracts on a
+software device. Timing, memory-type selection and driver behavior on discrete hardware remain
+local evidence. That job takes glslang from distro packages; the first hosted run confirms that
+those packages export the CMake targets ncnn expects, and a local glslang build is the fallback.
+Windows ARM64 uses the preview `windows-11-arm` label and stays outside this matrix.

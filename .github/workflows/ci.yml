@@ -1,0 +1,211 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  NCNN_VERSION: "20261020"
+  NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-install
+  NCNN_LINK_KIND: dylib
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15-intel is x86-64 and macos-15 is Apple Silicon, so both run natively.
+        os: [ubuntu-latest, windows-latest, macos-15-intel, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache ncnn SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-${{ matrix.os }}-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang clang-format libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'C:\Program Files\LLVM\bin\libclang.dll')) {
+            choco install llvm --no-progress -y
+          }
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PATH=C:\Program Files\LLVM\bin;$env:NCNN_INSTALL_DIR\bin;$env:PATH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Provide python3 on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The tool scripts use python3 so one command works on every runner.
+          if (!(Get-Command python3 -ErrorAction SilentlyContinue)) {
+            $source = (Get-Command python).Source
+            Copy-Item $source (Join-Path (Split-Path $source) 'python3.exe')
+          }
+          python3 --version
+
+      - name: Fetch pinned ncnn source
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: python3 tools/fetch-ncnn.py
+
+      - name: Build ncnn SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --all -- --check
+          clang-format --dry-run --Werror crates/ncnn-sys/native/*.cpp crates/ncnn-sys/native/*.h
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Example
+        run: cargo run -p ncnn-rust --example add
+
+      - name: Version consistency
+        if: runner.os == 'Linux'
+        run: python3 tools/check-versions.py
+
+      # Publish dry runs are the release gate: they package, rebuild from the archive
+      # and validate the registry metadata for both packages. The main package is
+      # verified against the archive built in the previous step, because ncnn-rust-sys
+      # is not on crates.io until the release publishes it first.
+      - name: Publish dry run
+        if: runner.os == 'Linux'
+        run: |
+          cargo publish -p ncnn-rust-sys --dry-run --allow-dirty
+          cat > "$RUNNER_TEMP/patch.toml" <<EOF
+          [patch.crates-io]
+          ncnn-rust-sys = { path = "$PWD/target/package/ncnn-rust-sys-0.1.0" }
+          EOF
+          cargo publish -p ncnn-rust --dry-run --allow-dirty --config "$RUNNER_TEMP/patch.toml"
+
+  msrv:
+    name: MSRV 1.85.1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.1"
+
+      - name: Cache ncnn SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-msrv-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Fetch and build ncnn
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - name: Check with the declared minimum
+        run: cargo check --workspace --all-targets
+
+  arm64:
+    name: test (ubuntu-24.04-arm)
+    runs-on: ubuntu-24.04-arm
+    env:
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-install
+      NCNN_LINK_KIND: dylib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ncnn SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-arm64-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Fetch and build ncnn
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - name: Test on native ARM64
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo test --workspace
+
+  # Hosted runners expose no GPU, so this job validates the Vulkan contracts on
+  # Mesa lavapipe. System glslang comes from distro packages; the first hosted
+  # run confirms that those packages export the CMake targets ncnn expects.
+  vulkan:
+    name: Vulkan (Mesa lavapipe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-vulkan
+      NCNN_LINK_KIND: dylib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install toolchain and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev glslang-dev libspirv-tools-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Cache ncnn Vulkan SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-vulkan-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Build ncnn with Vulkan
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}" --vulkan
+
+      - name: Record Vulkan device
+        run: |
+          if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          fi
+          vulkaninfo --summary || true
+
+      - name: Test with the software Vulkan device
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo test --workspace --features vulkan

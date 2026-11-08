@@ -1,0 +1,131 @@
+--- a/src/cpu.cpp
++++ b/src/cpu.cpp
+@@ -13,6 +13,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <string>
+ 
+ #ifdef _OPENMP
+ #if NCNN_SIMPLEOMP
+@@ -965,71 +966,26 @@
+ }
+ 
+ #if defined __ANDROID__ || defined __linux__
+-static int get_thread_siblings(int cpuid)
++static std::string get_thread_siblings(int cpuid)
+ {
+     char path[256];
+-    sprintf(path, "/sys/devices/system/cpu/cpu%d/topology/thread_siblings", cpuid);
+-
+-    FILE* fp = 0; //fopen(path, "rb");
+-    if (fp)
+-    {
+-        int thread_siblings = -1;
+-        int nscan = fscanf(fp, "%x", &thread_siblings);
+-        if (nscan != 1)
+-        {
+-            // ignore
+-        }
+-
+-        fclose(fp);
+-
+-        return thread_siblings;
+-    }
+-
+-    // second try, parse from human-readable thread_siblings_list
+     sprintf(path, "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpuid);
+ 
+-    fp = fopen(path, "rb");
+-    if (fp)
+-    {
+-        int thread_siblings = -1;
+-
+-        int id0;
+-        char sep;
+-        int id1;
+-
+-        int nscan = fscanf(fp, "%d", &id0);
+-        if (nscan == 1)
+-        {
+-            thread_siblings = (1 << id0);
+-
+-            while (fscanf(fp, "%c%d", &sep, &id1) == 2)
+-            {
+-                if (sep == ',')
+-                {
+-                    thread_siblings |= (1 << id1);
+-                }
+-                if (sep == '-' && id0 < id1)
+-                {
+-                    for (int i = id0 + 1; i <= id1; i++)
+-                    {
+-                        thread_siblings |= (1 << i);
+-                    }
+-                }
+-
+-                id0 = id1;
+-            }
+-        }
+-        else
+-        {
+-            // ignore
+-        }
+-
+-        fclose(fp);
+-
+-        return thread_siblings;
+-    }
+-
+-    return -1;
++    FILE* fp = fopen(path, "rb");
++    if (!fp)
++        return std::string();
++
++    // Kernel cpulist output is canonical and preserves CPU IDs of any mask width.
++    std::string siblings;
++    int ch;
++    while ((ch = fgetc(fp)) != EOF && ch != '\n')
++    {
++        siblings += (char)ch;
++    }
++
++    const bool read_error = ferror(fp) != 0;
++    fclose(fp);
++    return read_error ? std::string() : siblings;
+ }
+ #endif // defined __ANDROID__ || defined __linux__
+ 
+@@ -1066,11 +1022,11 @@
+ 
+     free(buffer);
+ #elif defined __ANDROID__ || defined __linux__
+-    std::vector<int> thread_set;
++    std::vector<std::string> thread_set;
+     for (int i = 0; i < g_cpucount; i++)
+     {
+-        int thread_siblings = get_thread_siblings(i);
+-        if (thread_siblings == -1)
++        const std::string thread_siblings = get_thread_siblings(i);
++        if (thread_siblings.empty())
+         {
+             // ignore malformed one
+             continue;
+@@ -1214,14 +1170,14 @@
+     // resolve physical cpu count in the shared_cpu_map
+     int shared_physical_cpu_count = 0;
+     {
+-        std::vector<int> thread_set;
++        std::vector<std::string> thread_set;
+         for (int i = 0; i < g_cpucount; i++)
+         {
+             if (!shared_cpu_map.is_enabled(i))
+                 continue;
+ 
+-            int thread_siblings = get_thread_siblings(i);
+-            if (thread_siblings == -1)
++            const std::string thread_siblings = get_thread_siblings(i);
++            if (thread_siblings.empty())
+             {
+                 // ignore malformed one
+                 continue;

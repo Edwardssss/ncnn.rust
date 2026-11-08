@@ -1,0 +1,5 @@
+{
+  "pinned": "20261020",
+  "dynamic": ["latest", "previous"],
+  "notes": "pinned must pass. Dynamic entries resolve to the newest and second-newest ncnn tags at run time."
+}

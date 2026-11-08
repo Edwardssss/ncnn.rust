@@ -1,0 +1,31 @@
+diff --git a/src/layer/vulkan/cast_vulkan.cpp b/src/layer/vulkan/cast_vulkan.cpp
+index 12edfac..09cb00b 100644
+--- a/src/layer/vulkan/cast_vulkan.cpp
++++ b/src/layer/vulkan/cast_vulkan.cpp
+@@ -16,6 +16,14 @@ Cast_vulkan::Cast_vulkan()
+     pipeline_cast_pack4 = 0;
+ }
+ 
++int Cast_vulkan::load_param(const ParamDict& pd)
++{
++    const int ret = Cast::load_param(pd);
++    // Only conversions with implemented shaders can execute on Vulkan.
++    support_vulkan = (type_from == 1 && type_to == 2) || (type_from == 2 && type_to == 1);
++    return ret;
++}
++
+ int Cast_vulkan::create_pipeline(const Option& opt)
+ {
+     const Mat& shape = bottom_shapes.empty() ? Mat() : bottom_shapes[0];
+diff --git a/src/layer/vulkan/cast_vulkan.h b/src/layer/vulkan/cast_vulkan.h
+index d54860a..3cda9d7 100644
+--- a/src/layer/vulkan/cast_vulkan.h
++++ b/src/layer/vulkan/cast_vulkan.h
+@@ -13,6 +13,7 @@ class Cast_vulkan : public Cast
+ public:
+     Cast_vulkan();
+ 
++    virtual int load_param(const ParamDict& pd);
+     virtual int create_pipeline(const Option& opt);
+     virtual int destroy_pipeline(const Option& opt);
+ 

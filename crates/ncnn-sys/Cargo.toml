@@ -1,0 +1,23 @@
+[package]
+name = "ncnn-rust-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Raw ncnn bindings and C ABI adapters for an externally installed SDK"
+readme = "README.md"
+keywords = ["ncnn", "ffi", "inference"]
+categories = ["external-ffi-bindings"]
+repository = "https://github.com/Edwardssss/ncnn.rust"
+homepage = "https://github.com/Edwardssss/ncnn.rust"
+documentation = "https://edwardssss.github.io/ncnn.rust/ncnn_rust_sys/"
+links = "ncnn"
+build = "build.rs"
+
+[features]
+default = []
+vulkan = []
+
+[build-dependencies]
+bindgen = "0.72"
+cc = "1"

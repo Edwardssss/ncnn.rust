@@ -1,0 +1,70 @@
+language: en-US
+tone_instructions: >-
+  Review Rust bindings to C++ code. Report findings as facts with file and line
+  references. Skip praise and speculation.
+
+reviews:
+  profile: assertive
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  path_filters:
+    - "!vendor/**"
+    - "!target/**"
+    - "!**/target/**"
+    - "!**/*.bin"
+    - "!**/*.param"
+    - "!**/*.onnx"
+    - "!**/Cargo.lock"
+  path_instructions:
+    - path: "crates/ncnn/src/**/*.rs"
+      instructions: >-
+        Check that every unsafe block carries a safety comment tied to the
+        documented contract, that ownership and lifetime rules in
+        docs/contracts.md still hold, and that fallible native status codes are
+        propagated instead of dropped.
+    - path: "crates/ncnn-sys/native/**"
+      instructions: >-
+        Check that no C++ exception crosses the C ABI, that every allocation has
+        one owner, and that adapter names keep the ncnn_rs_ prefix.
+    - path: "crates/ncnn-sys/build.rs"
+      instructions: >-
+        Check SDK version validation, feature agreement between the Cargo
+        feature and the native library, and that new environment variables are
+        validated with actionable messages.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check that jobs pin runner images and ncnn versions, that failures are
+        reported, and that no job depends on unset environment variables.
+    - path: "docs/**"
+      instructions: >-
+        Prefer declarative statements. Flag defensive or hedging wording, claims
+        without recorded evidence, and links to files that do not exist.
+
+  tools:
+    clippy:
+      enabled: true
+    markdownlint:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    ast-grep:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto

@@ -1,0 +1,20 @@
+[package]
+name = "ncnn-rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Inference and resource-safe interfaces for an externally installed ncnn SDK"
+readme = "README.md"
+keywords = ["ncnn", "inference", "neural-network"]
+categories = ["api-bindings", "science"]
+repository = "https://github.com/Edwardssss/ncnn.rust"
+homepage = "https://github.com/Edwardssss/ncnn.rust"
+documentation = "https://edwardssss.github.io/ncnn.rust/ncnn_rust/"
+
+[features]
+default = []
+vulkan = ["ncnn-sys/vulkan"]
+
+[dependencies]
+ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.1.0" }

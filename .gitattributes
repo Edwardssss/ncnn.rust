@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.tar.gz binary
+*.bin binary
+*.param text eol=lf
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.png binary
+*.jpg binary

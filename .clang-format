@@ -1,0 +1,10 @@
+# C++ adapters follow the surrounding ncnn style: four-space indentation and
+# braces on the next line.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 0
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+PointerAlignment: Left
+SortIncludes: false

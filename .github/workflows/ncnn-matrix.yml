@@ -1,0 +1,109 @@
+name: ncnn version matrix
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  NCNN_LINK_KIND: dylib
+  NCNN_ALLOW_UNTESTED_VERSION: "1"
+  LIBCLANG_PATH: /usr/lib/llvm-18/lib
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.plan.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version plan
+        id: plan
+        run: python3 tools/ncnn-versions.py >> "$GITHUB_OUTPUT"
+
+  compat:
+    needs: resolve
+    name: ncnn ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.resolve.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Cache SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+          key: ncnn-${{ matrix.version }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/patches/*.patch') }}
+
+      - name: Fetch source
+        run: |
+          mkdir -p vendor
+          curl -fsSL "https://github.com/Tencent/ncnn/archive/refs/tags/${{ matrix.version }}.tar.gz" -o "vendor/ncnn-${{ matrix.version }}.tar.gz"
+          tar -xzf "vendor/ncnn-${{ matrix.version }}.tar.gz" -C vendor
+
+      - name: Build SDK
+        run: python3 tools/build-ncnn-sdk.py "vendor/ncnn-${{ matrix.version }}" "$PWD/ncnn-${{ matrix.version }}"
+
+      - name: Interface and numerical compatibility
+        env:
+          NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+        run: |
+          cargo test --workspace
+          python3 tools/check-coverage.py
+
+      - name: Native reference and trained models
+        env:
+          NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+        run: |
+          cmake -S crates/ncnn/tests/native -B target/reference-${{ matrix.version }} -DCMAKE_BUILD_TYPE=Release
+          cmake --build target/reference-${{ matrix.version }} --config Release -j "$(nproc)"
+          python3 tools/fetch-models.py
+          cargo run -p ncnn-rust --example model_regression -- \
+            target/model-fixtures "target/reference-${{ matrix.version }}/ncnn_cpu_reference"
+
+      - name: Record result
+        if: always()
+        env:
+          VERSION: ${{ matrix.version }}
+          STATUS: ${{ job.status }}
+        run: |
+          echo "| $VERSION | $STATUS |" >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    needs: compat
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Summarise
+        run: |
+          echo "## ncnn version matrix" >> "$GITHUB_STEP_SUMMARY"
+          echo "Overall result: ${{ needs.compat.result }}. Per-version rows are written by each matrix job." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report failure
+        if: needs.compat.result == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="ncnn version matrix failure"
+          body="The scheduled compatibility matrix failed (run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          existing=$(gh issue list --search "$title in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

@@ -1,0 +1,69 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  NCNN_VERSION: "20261020"
+  NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-install
+  NCNN_LINK_KIND: dylib
+
+jobs:
+  docs:
+    name: cargo doc
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ncnn SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-docs-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/patches/*.patch') }}
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+
+      - name: Fetch and build ncnn
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      # docs.rs cannot build this workspace: its sandbox has no ncnn SDK, and the
+      # build script compiles C++ adapters against the installed headers.
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo doc --workspace --no-deps --features vulkan
+
+      - name: Package site
+        run: |
+          mkdir -p site
+          cp -r target/doc/. site/
+          printf '<meta http-equiv="refresh" content="0; url=ncnn_rust/index.html">' > site/index.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
