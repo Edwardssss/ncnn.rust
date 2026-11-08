@@ -6,6 +6,8 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # Patch and minor bumps arrive as one pull request. Major bumps stay separate
+      # because they change the generated bindings and need individual validation.
       cargo-minor:
         patterns: ["*"]
         update-types: ["minor", "patch"]
@@ -14,3 +16,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      # Action bumps only change the runtime the action runs on, so every update
+      # type is grouped. The Pages actions must move together anyway.
+      github-actions:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
