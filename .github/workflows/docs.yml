@@ -27,11 +27,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache ncnn SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-docs-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/patches/*.patch') }}
@@ -64,9 +64,9 @@ jobs:
           cp -r target/doc/. site/
           printf '<meta http-equiv="refresh" content="0; url=ncnn_rust/index.html">' > site/index.html
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

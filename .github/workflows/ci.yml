@@ -19,14 +19,14 @@ jobs:
         # macos-15-intel is x86-64 and macos-15 is Apple Silicon, so both run natively.
         os: [ubuntu-latest, windows-latest, macos-15-intel, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - name: Cache ncnn SDK
         id: sdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-${{ matrix.os }}-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
@@ -119,13 +119,13 @@ jobs:
     name: MSRV 1.85.1
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.85.1"
 
       - name: Cache ncnn SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-msrv-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
@@ -153,11 +153,11 @@ jobs:
       NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-install
       NCNN_LINK_KIND: dylib
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache ncnn SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-arm64-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
@@ -191,7 +191,7 @@ jobs:
       NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-vulkan
       NCNN_LINK_KIND: dylib
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install toolchain and software Vulkan
@@ -203,7 +203,7 @@ jobs:
           echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Cache ncnn Vulkan SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
           key: ncnn-vulkan-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
