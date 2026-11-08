@@ -184,7 +184,7 @@ jobs:
       - name: Install toolchain and software Vulkan
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev glslang-dev libspirv-tools-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          sudo apt-get install -y cmake clang libclang-dev glslang-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools
           echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
 
       - name: Cache ncnn Vulkan SDK

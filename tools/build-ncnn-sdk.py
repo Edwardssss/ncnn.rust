@@ -40,6 +40,12 @@ FEATURES = [
 PATCH_DIR = pathlib.Path(__file__).resolve().parent / "patches"
 
 
+def source_version(source):
+    """Derives the release tag from a source directory such as ncnn-20261020."""
+    name = source.name
+    return name.split("-", 1)[1] if "-" in name else name
+
+
 def patch_targets(patch):
     """Maps each patched file to the lines the patch adds."""
     targets = {}
@@ -63,12 +69,6 @@ def is_applied(source, patch):
         if any(line and line not in text for line in added):
             return False
     return True
-
-
-def source_version(source):
-    """Derives the release tag from a source directory such as ncnn-20261020."""
-    name = source.name
-    return name.split("-", 1)[1] if "-" in name else name
 
 
 def apply_patches(source):
@@ -122,6 +122,9 @@ def main() -> int:
         str(build),
         "-DCMAKE_BUILD_TYPE=Release",
         f"-DCMAKE_INSTALL_PREFIX={prefix}",
+        # ncnn stamps the configure date unless a version is given, which would make
+        # platform.h disagree with the pinned release.
+        f"-DNCNN_VERSION={source_version(source)}",
         f"-DNCNN_VULKAN={'ON' if args.vulkan else 'OFF'}",
     ]
     if args.vulkan:
