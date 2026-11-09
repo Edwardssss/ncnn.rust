@@ -1,8 +1,8 @@
 //! Pairs of layers and graphs that must agree with themselves. A round trip proves
 //! layout and scale agreement without needing a second implementation as a reference.
 
-use crate::support::{self, assert_close_with};
-use ncnn_rust::{ElementKind, Mat};
+use crate::support::{self, assert_close_with, tagged};
+use ncnn_rust::{ElementKind, Endpoint, Mat};
 
 #[test]
 fn unfold_and_fold_round_trip() {
@@ -76,5 +76,67 @@ fn narrow_elements_convert_to_fp32() {
             .expect("typed read of a narrow tensor");
         assert_eq!(values, expected);
         std::mem::forget(mat);
+    }
+}
+
+#[test]
+fn quantized_pipeline_keeps_its_one_byte_storage() {
+    // A quantized convolution loads a float weight block followed by one scale per
+    // output channel and one input scale, and `Quantize` stores its result one byte
+    // wide. The scales make the stored bytes readable with `to_i8`.
+    let quantized = support::graph(
+        3,
+        3,
+        "Input input 0 1 input\n\
+         Convolution conv 1 1 input scaled 0=1 1=2 5=0 6=4 8=1\n\
+         Quantize quantize 1 1 scaled stored 0=1\n",
+        &support::blocks(&[
+            &tagged(&[0.25; 4]),
+            &support::raw(&[16.0]),
+            &support::raw(&[1.0]),
+            &support::raw(&[1.0]),
+        ]),
+    );
+    let float = support::graph(
+        2,
+        2,
+        "Input input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4\n",
+        &support::blocks(&[&tagged(&[0.25; 4])]),
+    );
+
+    let values = support::ramp(16);
+    let reference = support::run_labeled(&float, &values, &[4, 4, 1], "float convolution");
+    let mut extractor = quantized.extractor().expect("extractor");
+    extractor
+        .input(
+            Endpoint::Name("input"),
+            Mat::from_f32(&values, &[4, 4, 1]).expect("input"),
+        )
+        .expect("input");
+    let scaled = extractor
+        .extract(Endpoint::Name("scaled"))
+        .expect("scaled")
+        .to_f32()
+        .expect("scaled values");
+    assert_close_with(&scaled, &reference, 0.5);
+    let stored = {
+        let guard = extractor
+            .extract_stored(Endpoint::Name("stored"))
+            .expect("stored");
+        assert_eq!(guard.info().elemsize, 1, "quantized storage byte width");
+        guard.to_i8().expect("stored values")
+    };
+
+    assert_eq!(stored.len(), scaled.len());
+    assert!(
+        stored.iter().any(|value| *value != 0),
+        "quantized storage is not all zeros"
+    );
+    for (index, (value, source)) in stored.iter().zip(&scaled).enumerate() {
+        let expected = source.round();
+        assert!(
+            (f32::from(*value) - expected).abs() <= 1.0,
+            "element {index}: stored {value}, expected {expected}"
+        );
     }
 }

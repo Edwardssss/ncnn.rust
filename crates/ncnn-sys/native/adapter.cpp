@@ -388,6 +388,38 @@ extern "C" int ncnn_rs_mat_read_typed(ncnn_mat_t mat, int kind, float* out, size
     }
     return 0;
 }
+// Native extraction converts packed, FP16, BF16 and INT8 blobs unless the caller passes a
+// non-zero type, which keeps the storage a layer wrote so Rust can read it by element kind.
+extern "C" int ncnn_rs_extractor_extract_stored(ncnn_extractor_t ex, const char* name, int type, ncnn_mat_t* out)
+{
+    NCNN_RS_TRY
+    {
+        if (!ex || !name || !out)
+            return -1;
+        ncnn::Mat feat;
+        int ret = ((ncnn::Extractor*)ex)->extract(name, feat, type);
+        if (ret != 0 || feat.empty())
+            return ret != 0 ? ret : -100;
+        *out = (ncnn_mat_t) new ncnn::Mat(feat);
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
+extern "C" int ncnn_rs_extractor_extract_stored_index(ncnn_extractor_t ex, int index, int type, ncnn_mat_t* out)
+{
+    NCNN_RS_TRY
+    {
+        if (!ex || !out)
+            return -1;
+        ncnn::Mat feat;
+        int ret = ((ncnn::Extractor*)ex)->extract(index, feat, type);
+        if (ret != 0 || feat.empty())
+            return ret != 0 ? ret : -100;
+        *out = (ncnn_mat_t) new ncnn::Mat(feat);
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
 extern "C" int ncnn_rs_mat_reshape(ncnn_mat_t mat, int dims, const int* s, int independent, ncnn_mat_t* out)
 {
     NCNN_RS_TRY

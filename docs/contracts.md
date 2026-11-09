@@ -36,6 +36,11 @@ whether a 16-bit element is IEEE half or bfloat16, so the caller names the forma
 the signed 8-bit values of a quantized tensor. `OutputGuard` exposes both methods, which makes a
 quantized blob readable without an FP32 copy on the Rust side.
 
+Extraction converts packed, FP16, BF16 and INT8 storage to FP32 unless the caller asks for stored
+storage. `Extractor::extract_stored` keeps the layout the producing layer wrote, so `TensorInfo`
+reports the stored element width and the typed readers apply, while `extract` and the owned forms
+return converted FP32 values.
+
 Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
 
 ## Advanced resources

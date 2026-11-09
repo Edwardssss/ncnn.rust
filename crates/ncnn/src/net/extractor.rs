@@ -93,16 +93,32 @@ impl Extractor<'_> {
         }
         Ok(())
     }
-    fn extract_native(&self, target: &Target) -> Result<Mat> {
+    fn extract_native(&self, target: &Target, stored: bool) -> Result<Mat> {
         self.ensure_not_reserved()?;
         let mut raw = std::ptr::null_mut();
+        let type_mask = i32::from(stored);
         let code = unsafe {
             match target {
                 Target::Named(name) => {
-                    sys::ncnn_extractor_extract(self.raw, name.as_ptr(), &mut raw)
+                    if stored {
+                        sys::ncnn_rs_extractor_extract_stored(
+                            self.raw,
+                            name.as_ptr(),
+                            type_mask,
+                            &mut raw,
+                        )
+                    } else {
+                        sys::ncnn_extractor_extract(self.raw, name.as_ptr(), &mut raw)
+                    }
                 }
                 Target::Indexed(index) => {
-                    sys::ncnn_extractor_extract_index(self.raw, *index, &mut raw)
+                    if stored {
+                        sys::ncnn_rs_extractor_extract_stored_index(
+                            self.raw, *index, type_mask, &mut raw,
+                        )
+                    } else {
+                        sys::ncnn_extractor_extract_index(self.raw, *index, &mut raw)
+                    }
                 }
             }
         };
@@ -154,7 +170,27 @@ impl Extractor<'_> {
     pub fn extract<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<OutputGuard<'_>> {
         self.ensure_borrowable()?;
         let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target)?;
+        let mat = self.extract_native(&target, false)?;
+        self._net.guard.output_borrowed.set(true);
+        Ok(OutputGuard {
+            mat,
+            network_borrowed: &self._net.guard.output_borrowed,
+            _extractor: PhantomData,
+        })
+    }
+    /// Borrows an output in the layout the producing layer wrote.
+    ///
+    /// Native extraction converts packed, FP16, BF16 and INT8 storage to FP32 unless the
+    /// caller asks for stored storage, so this form keeps the element width in
+    /// [`TensorInfo`](crate::TensorInfo) and the caller names the scalar format through
+    /// [`OutputGuard::to_f32_typed`] or [`OutputGuard::to_i8`].
+    pub fn extract_stored<'a>(
+        &mut self,
+        endpoint: impl Into<Endpoint<'a>>,
+    ) -> Result<OutputGuard<'_>> {
+        self.ensure_borrowable()?;
+        let target = self.resolve(endpoint.into(), true)?;
+        let mat = self.extract_native(&target, true)?;
         self._net.guard.output_borrowed.set(true);
         Ok(OutputGuard {
             mat,
@@ -165,7 +201,7 @@ impl Extractor<'_> {
     /// Returns validated values with independent owned storage.
     pub fn extract_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<FinalOutput> {
         let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target)?;
+        let mat = self.extract_native(&target, false)?;
         Ok(FinalOutput {
             info: mat.info(),
             values: mat.to_f32()?,
@@ -178,7 +214,7 @@ impl Extractor<'_> {
         buffer: &mut Vec<f32>,
     ) -> Result<crate::TensorInfo> {
         let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target)?;
+        let mat = self.extract_native(&target, false)?;
         let info = mat.info();
         mat.to_f32_into(buffer)?;
         Ok(info)
@@ -190,7 +226,7 @@ impl Extractor<'_> {
         buffer: &mut Vec<f32>,
     ) -> Result<crate::TensorInfo> {
         let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target)?;
+        let mat = self.extract_native(&target, false)?;
         let info = mat.info();
         mat.append_f32_to(buffer)?;
         Ok(info)
