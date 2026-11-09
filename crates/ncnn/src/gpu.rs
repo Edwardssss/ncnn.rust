@@ -190,6 +190,10 @@ impl Allocator {
         (self.0.live_bytes.get(), self.0.peak_bytes.get())
     }
     /// Uploads and waits before returning resident FP32 storage.
+    ///
+    /// A device that refuses the storage reports the refusal as a native failure during
+    /// `Vulkan upload`; the allocator, the tensors it already returned and later requests stay
+    /// usable.
     pub fn upload(&self, mat: &Mat) -> Result<Tensor> {
         let info = mat.info();
         if info.elemsize != 4 || info.elempack != 1 || info.dims == 0 {
@@ -198,11 +202,11 @@ impl Allocator {
             ));
         }
         let raw = unsafe { sys::ncnn_rs_gpu_upload(self.0.raw, mat.as_raw()) };
-        self.tensor(raw)
+        self.tensor(raw, "Vulkan upload")
     }
-    fn tensor(&self, raw: *mut c_void) -> Result<Tensor> {
+    fn tensor(&self, raw: *mut c_void, operation: &'static str) -> Result<Tensor> {
         if raw.is_null() {
-            return Err(Error::Native(-1));
+            return Err(Error::NativeAt(operation, -1));
         }
         let bytes = unsafe { sys::ncnn_rs_gpu_tensor_bytes(raw) };
         let Some(live) = self.0.live_bytes.get().checked_add(bytes) else {
@@ -224,7 +228,7 @@ impl Allocator {
         }
         let raw = unsafe { sys::ncnn_rs_gpu_command_create(self.0.raw, net.as_raw()) };
         if raw.is_null() {
-            return Err(Error::Native(-1));
+            return Err(Error::NativeAt("Vulkan command creation", -1));
         }
         Ok(Command {
             raw,
@@ -261,17 +265,20 @@ impl Allocator {
         {
             return Err(Error::invalid("Invalid external buffer range"));
         }
-        self.tensor(unsafe {
-            sys::ncnn_rs_gpu_import(
-                self.0.raw,
-                buffer,
-                offset,
-                capacity,
-                elements as i32,
-                access,
-                stage,
-            )
-        })
+        self.tensor(
+            unsafe {
+                sys::ncnn_rs_gpu_import(
+                    self.0.raw,
+                    buffer,
+                    offset,
+                    capacity,
+                    elements as i32,
+                    access,
+                    stage,
+                )
+            },
+            "Vulkan import",
+        )
     }
 }
 impl Tensor {
@@ -342,7 +349,7 @@ impl<'a> Command<'a> {
         let name = CString::new(name)?;
         self.recorded = true;
         let raw = unsafe { sys::ncnn_rs_gpu_command_extract(self.raw, name.as_ptr()) };
-        match self.allocator.tensor(raw) {
+        match self.allocator.tensor(raw, "Vulkan command output") {
             Ok(tensor) => self.outputs.push(tensor),
             Err(error) => {
                 self.failed = true;
