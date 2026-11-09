@@ -112,7 +112,7 @@ rejection. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pi
 the newest and previous tags, audits the enabled C API against generated bindings and library
 symbols, and compares trained-model output with a native C++ reference. `cargo test` covers the
 in-repo conformance suite: operator families compared against Rust reference loops, a case for each
-of the 108 layer types the SDK ships, of which 40 reach a forward pass, the public API paths that
+of the 108 layer types the SDK ships, of which 45 reach a forward pass, the public API paths that
 the families do not reach, and a zero-allocation steady-state gate. No external model files are
 needed.
 

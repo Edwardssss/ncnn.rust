@@ -7,6 +7,7 @@
 mod allocation;
 mod api;
 mod graphs;
+mod invariants;
 mod layers;
 mod operators;
 mod support;

@@ -97,6 +97,13 @@ jobs:
           DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo run -p ncnn-rust --example add
 
+      # A second pass catches state that only breaks after the first one.
+      - name: Repeat the suite
+        if: runner.os == 'Linux'
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo test --workspace
+
       - name: Version consistency
         if: runner.os == 'Linux'
         run: python3 tools/check-versions.py
