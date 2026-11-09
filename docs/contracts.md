@@ -30,6 +30,12 @@ Model files are trusted native input. The bounded binary reader limits reads to 
 
 Safe tensors expose immutable data. `as_f32_slice` borrows only aligned, contiguous, unpacked 32-bit storage; `channel_f32` skips inter-channel padding. The borrow ends before the tensor can be dropped or consumed. Raw/native writers preserve these Rust borrows. Reshape and normalization operate on independent copies. Logical channel contents are copied separately from channel padding. Dimensions, element counts, and integer conversions are checked before allocation. `to_f32` explicitly selects FP32 interpretation and checks 32-bit scalar storage, pack 1, and batch 1; native metadata alone carries no complete scalar type tag.
 
+`to_f32_typed` accepts an `ElementKind` and converts packed or narrow storage: signed and unsigned
+8-bit, signed 16-bit, signed 32-bit, IEEE half and bfloat16. ncnn records the element width but not
+whether a 16-bit element is IEEE half or bfloat16, so the caller names the format. `to_i8` returns
+the signed 8-bit values of a quantized tensor. `OutputGuard` exposes both methods, which makes a
+quantized blob readable without an FP32 copy on the Rust side.
+
 Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
 
 ## Advanced resources
@@ -89,6 +95,14 @@ wrapper regressions without a second backend.
 - `graphs.rs` covers multi-input, split/concat, residual, pool/split/interp/concat and
   multi-output topologies, plus repeated-run determinism and packing/FP16 option parity.
 - `allocation.rs` asserts that the reusable-buffer path allocates nothing once warm.
+- `api.rs` reaches the public paths the families do not: file loading, custom readers, parameter
+  dictionaries, unchecked reads, reshape views, the three endpoint forms and concatenated outputs.
+- `invariants.rs` checks pairs that must agree with themselves: `Unfold` with `Fold`, `Split` with
+  `Eltwise`, and the narrow-element conversion against known bit patterns.
+- `layers.rs` holds one case per layer type the SDK registers. Cases run in child processes of the
+  test binary, so a layer that aborts in native code becomes a named failure instead of a lost run.
+  Forty-five cases reach a forward pass; the rest assert that the type registers and its parameters
+  parse.
 
 Native ncnn enables FP16 packed, storage and arithmetic by default on ARM64 and Apple Silicon, so
 results there round to FP16 before any comparison. The conformance suite pins a single-threaded

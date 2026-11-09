@@ -1,6 +1,42 @@
 use crate::{error::status, sys, Error, Result};
 use std::{marker::PhantomData, rc::Rc};
 
+/// Scalar format of a native tensor.
+///
+/// ncnn records the element width but not whether a 16-bit element is IEEE half
+/// or bfloat16, so the caller supplies the format for those tensors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElementKind {
+    /// IEEE 754 single precision.
+    F32,
+    /// IEEE 754 half precision.
+    F16,
+    /// Brain floating point, 16 bits.
+    Bf16,
+    /// Signed 8-bit integer, the storage of a quantized tensor.
+    I8,
+    /// Unsigned 8-bit integer.
+    U8,
+    /// Signed 16-bit integer.
+    I16,
+    /// Signed 32-bit integer.
+    I32,
+}
+
+impl ElementKind {
+    fn code(self) -> i32 {
+        match self {
+            Self::F32 => 0,
+            Self::F16 => 1,
+            Self::Bf16 => 2,
+            Self::I8 => 3,
+            Self::U8 => 4,
+            Self::I16 => 5,
+            Self::I32 => 6,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 /// Native tensor metadata for one extracted output.
 pub struct TensorInfo {
@@ -140,6 +176,46 @@ impl Mat {
     /// interpretation for tensors whose scalar format is supplied by the model.
     pub fn to_f32(&self) -> Result<Vec<f32>> {
         unsafe { self.read_f32_unchecked() }
+    }
+    /// Copies any scalar format into FP32 values.
+    ///
+    /// Native tensors carry an element width but no format tag, so a 16-bit
+    /// tensor needs the caller to say whether it stores IEEE half or bfloat16.
+    /// Quantized outputs of `Quantize` and `Requantize` are signed 8-bit.
+    pub fn to_f32_typed(&self, kind: ElementKind) -> Result<Vec<f32>> {
+        let info = self.info();
+        let count = self.logical_count(&info)?;
+        let mut values = vec![0f32; count];
+        if count == 0 {
+            return Ok(values);
+        }
+        status(unsafe {
+            sys::ncnn_rs_mat_read_typed(self.raw, kind.code(), values.as_mut_ptr(), values.len())
+        })?;
+        Ok(values)
+    }
+    /// Copies signed 8-bit quantized values without going through FP32 storage.
+    pub fn to_i8(&self) -> Result<Vec<i8>> {
+        Ok(self
+            .to_f32_typed(ElementKind::I8)?
+            .into_iter()
+            .map(|value| value as i8)
+            .collect())
+    }
+    fn logical_count(&self, info: &TensorInfo) -> Result<usize> {
+        if info.n <= 0 || info.w <= 0 || info.h <= 0 || info.d <= 0 || info.c <= 0 {
+            return Err(Error::Invalid("Tensor has an empty extent"));
+        }
+        let pixels = (info.w as usize)
+            .checked_mul(info.h as usize)
+            .and_then(|value| value.checked_mul(info.d as usize))
+            .ok_or(Error::Invalid("Tensor extent overflows"))?;
+        let pack = info.elempack.max(1) as usize;
+        pixels
+            .checked_mul(pack)
+            .and_then(|value| value.checked_mul(info.c as usize))
+            .and_then(|value| value.checked_mul(info.n as usize))
+            .ok_or(Error::Invalid("Tensor extent overflows"))
     }
     /// Copies logical FP32 elements into an exact-sized initialized slice.
     /// Channel padding is omitted. A size/layout error leaves the slice unchanged.

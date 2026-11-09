@@ -291,6 +291,14 @@ impl OutputGuard<'_> {
     pub fn to_f32(&self) -> Result<Vec<f32>> {
         self.mat.to_f32()
     }
+    /// Copies any scalar format into FP32 values, including quantized outputs.
+    pub fn to_f32_typed(&self, kind: crate::ElementKind) -> Result<Vec<f32>> {
+        self.mat.to_f32_typed(kind)
+    }
+    /// Copies signed 8-bit quantized values.
+    pub fn to_i8(&self) -> Result<Vec<i8>> {
+        self.mat.to_i8()
+    }
 }
 
 impl Drop for OutputGuard<'_> {

@@ -286,6 +286,108 @@ extern "C" int ncnn_rs_mat_read_f32(ncnn_mat_t mat, float* out, size_t count)
                    plane * sizeof(float));
     return 0;
 }
+static size_t rs_element_bytes(int kind)
+{
+    switch (kind)
+    {
+    case 0:
+    case 6:
+        return 4;
+    case 1:
+    case 2:
+    case 5:
+        return 2;
+    case 3:
+    case 4:
+        return 1;
+    default:
+        return 0;
+    }
+}
+static float rs_element_to_f32(const unsigned char* p, int kind)
+{
+    switch (kind)
+    {
+    case 0:
+    {
+        float v;
+        memcpy(&v, p, sizeof(v));
+        return v;
+    }
+    case 1:
+    {
+        unsigned short v;
+        memcpy(&v, p, sizeof(v));
+        return ncnn::float16_to_float32(v);
+    }
+    case 2:
+    {
+        unsigned short v;
+        memcpy(&v, p, sizeof(v));
+        return ncnn::bfloat16_to_float32(v);
+    }
+    case 3:
+    {
+        signed char v;
+        memcpy(&v, p, sizeof(v));
+        return (float)v;
+    }
+    case 4:
+    {
+        unsigned char v;
+        memcpy(&v, p, sizeof(v));
+        return (float)v;
+    }
+    case 5:
+    {
+        short v;
+        memcpy(&v, p, sizeof(v));
+        return (float)v;
+    }
+    case 6:
+    {
+        int v;
+        memcpy(&v, p, sizeof(v));
+        return (float)v;
+    }
+    default:
+        return 0.f;
+    }
+}
+extern "C" int ncnn_rs_mat_read_typed(ncnn_mat_t mat, int kind, float* out, size_t count)
+{
+    if (!mat || !out)
+        return -1;
+    const ncnn::Mat& m = *(ncnn::Mat*)mat;
+    const size_t element_bytes = rs_element_bytes(kind);
+    if (!element_bytes || m.elempack <= 0 || m.elemsize != element_bytes * (size_t)m.elempack)
+        return -1;
+    if (m.n <= 0 || m.w <= 0 || m.h <= 0 || m.d <= 0 || m.c <= 0 || !m.data)
+        return -1;
+    size_t pixels = 1;
+    for (int extent : {m.w, m.h, m.d})
+    {
+        if ((size_t)extent > SIZE_MAX / pixels)
+            return -1;
+        pixels *= (size_t)extent;
+    }
+    const size_t per_channel = pixels * (size_t)m.elempack;
+    if ((size_t)m.c > SIZE_MAX / per_channel || (size_t)m.n > SIZE_MAX / ((size_t)m.c * per_channel))
+        return -1;
+    if (count != (size_t)m.c * per_channel * (size_t)m.n)
+        return -1;
+    for (int b = 0; b < m.n; b++)
+    {
+        for (int q = 0; q < m.c; q++)
+        {
+            const unsigned char* base = (const unsigned char*)m.data + ((size_t)b * m.nstep + (size_t)q * m.cstep) * m.elemsize;
+            float* dst = out + ((size_t)b * m.c + q) * per_channel;
+            for (size_t i = 0; i < per_channel; i++)
+                dst[i] = rs_element_to_f32(base + i * element_bytes, kind);
+        }
+    }
+    return 0;
+}
 extern "C" int ncnn_rs_mat_reshape(ncnn_mat_t mat, int dims, const int* s, int independent, ncnn_mat_t* out)
 {
     NCNN_RS_TRY
