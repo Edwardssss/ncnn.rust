@@ -111,10 +111,9 @@ resident inference, guard descriptors, external buffer import, pipeline caches a
 rejection. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pinned release plus
 the newest and previous tags, audits the enabled C API against generated bindings and library
 symbols, and compares trained-model output with a native C++ reference. `cargo test` covers the
-in-repo conformance suite: operator families compared against Rust reference loops, a case for each
-of the 108 layer types the SDK ships, of which 45 reach a forward pass, the public API paths that
-the families do not reach, and a zero-allocation steady-state gate. No external model files are
-needed.
+in-repo conformance suite: operator families compared against Rust reference loops, one inference
+per layer type among the 108 the SDK ships, the public API paths that the families do not reach,
+and a zero-allocation steady-state gate. No external model files are needed.
 
 ## Documentation
 

@@ -1,24 +1,14 @@
 //! One case per layer type that the operator families do not compare numerically.
-//! A forward case loads the layer with the smallest valid parameter set and runs one
+//! Each case loads the layer with the smallest valid parameter set and runs one
 //! inference, which proves that the type is registered, that its parameters parse and
-//! that the result holds finite values. Detection heads, recurrent stacks and
-//! attention variants need anchored inputs or nested weight blocks, so their cases
-//! assert that the layer type is registered and that its parameters parse.
+//! that the result holds finite values. Detection heads, recurrent stacks and attention
+//! variants therefore carry the weights, operand values or producer layer their forward
+//! pass needs instead of stopping at the parameter boundary.
 //!
 //! Array parameters use the `-<23300 + id>=count,values` form that ncnn writes, so an
 //! array for key 4 starts with `-23304`.
 
 use crate::support::{self, tagged};
-
-#[derive(Clone, Copy, PartialEq)]
-enum Tier {
-    /// Load parameters and weights, then run one inference.
-    Forward,
-    /// Load parameters only. Detection heads, recurrent stacks and attention
-    /// variants need anchored inputs or nested weight blocks, so their cases assert
-    /// that the type is registered and that its parameters parse.
-    Parameters,
-}
 
 #[derive(Clone, Copy)]
 enum Inputs {
@@ -33,9 +23,9 @@ struct Case {
     parameters: &'static str,
     weights: Vec<u8>,
     inputs: Inputs,
-    tier: Tier,
-    /// Explicit second operand, for layers whose second input carries coordinates.
-    second_values: Option<&'static [f32]>,
+    /// Explicit operand values, for layers whose inputs carry coordinates, scores or
+    /// image metadata that a plain ramp cannot express.
+    values: Vec<(usize, &'static [f32])>,
     /// Replacement graph with its layer and blob counts, for layers that need a producer.
     graph: Option<(&'static str, usize, usize)>,
 }
@@ -47,15 +37,9 @@ impl Case {
             parameters,
             weights: Vec::new(),
             inputs: Inputs::One(&[4, 4, 1]),
-            tier: Tier::Forward,
-            second_values: None,
+            values: Vec::new(),
             graph: None,
         }
-    }
-
-    fn parameters_only(mut self) -> Self {
-        self.tier = Tier::Parameters;
-        self
     }
 
     fn weights(mut self, weights: Vec<u8>) -> Self {
@@ -68,8 +52,8 @@ impl Case {
         self
     }
 
-    fn second_values(mut self, values: &'static [f32]) -> Self {
-        self.second_values = Some(values);
+    fn operand(mut self, index: usize, values: &'static [f32]) -> Self {
+        self.values.push((index, values));
         self
     }
 
@@ -176,29 +160,42 @@ fn cases() -> Vec<Case> {
         Case::new("MemoryData", "0=4 1=1 2=1 21=1")
             .weights(support::blocks(&[&support::raw(&[0.5; 4])]))
             .inputs(Inputs::Memory),
-        // Layers whose forward pass needs anchors, nested weights or two blobs.
-        Case::new("Proposal", "")
-            .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 4]))
-            .parameters_only(),
+        // Layers whose forward pass decodes regions or detections, so their operands carry
+        // coordinates, scores or image metadata instead of a plain ramp.
+        // Proposal propagates 9 generated anchors over a two by two score map and keeps
+        // what survives the size filter, so the metadata carries a real image size.
+        Case::new("Proposal", "0=16 1=16 2=100 3=50 4=0.7 5=16")
+            .inputs(Inputs::Three(&[2, 2, 18], &[2, 2, 36], &[3]))
+            .operand(2, &[128., 128., 1.]),
         Case::new("ROIPooling", "0=2 1=2").inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5])),
-        Case::new("PSROIPooling", "0=1 1=1 2=0.25")
-            .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
-            .parameters_only(),
-        // The native ROI align path aborts roughly one run in six even with a zero batch
-        // index and ordered corners, so the case stops at the parameter boundary.
+        // The region pooling reads one region per row of four coordinates, and the
+        // channel count must match the pooled grid times the output dimension.
+        Case::new("PSROIPooling", "0=1 1=1 2=1 3=4")
+            .inputs(Inputs::Two(&[8, 8, 4], &[4]))
+            .operand(1, &[0., 0., 5., 5.]),
+        // Region alignment samples inside the feature map, so the case passes a region
+        // whose corners sit within the four by four operand.
         Case::new("ROIAlign", "0=2 1=2")
             .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
-            .second_values(&[0., 0., 0., 2., 2.]),
+            .operand(1, &[0., 0., 0., 2., 2.]),
         Case::new("PriorBox", "-23300=1,16 9=8 10=8").inputs(Inputs::Two(&[4, 4, 2], &[8, 8, 3])),
-        Case::new("DetectionOutput", "")
-            .inputs(Inputs::Three(&[4, 4, 2], &[4, 4, 2], &[4, 4, 2]))
-            .parameters_only(),
-        Case::new("YoloDetectionOutput", "0=2 1=1 2=0.01 3=0.45 -23304=2,1,2").parameters_only(),
+        // Detection heads decode locations against priors, so the case supplies a prior
+        // pair of box and variance rows plus confidence scores that clear the threshold.
+        Case::new("DetectionOutput", "0=2 1=0.05 2=300 3=100 4=0.5")
+            .inputs(Inputs::Three(&[16], &[8], &[16, 2]))
+            .operand(0, &[0.1; 16])
+            .operand(1, &[0.1, 0.9, 0.1, 0.9, 0.1, 0.9, 0.1, 0.9])
+            .operand(2, &[
+                10., 10., 50., 50., 10., 10., 50., 50., 10., 10., 50., 50., 10., 10., 50., 50.,
+                0.1, 0.1, 0.2, 0.2, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1, 0.2, 0.2,
+            ]),
+        Case::new("YoloDetectionOutput", "0=2 1=1 2=0.01 3=0.45 -23304=2,1,2")
+            .inputs(Inputs::One(&[4, 4, 7])),
         Case::new(
             "Yolov3DetectionOutput",
             "0=2 1=1 2=0.01 3=0.45 -23304=2,1,2 -23305=1,0 -23306=1,8",
         )
-        .parameters_only(),
+        .inputs(Inputs::One(&[4, 4, 7])),
         // Recurrent stacks load three tagged blocks in order: input weights, bias and
         // recurrent weights. The input carries four steps of four features.
         Case::new("RNN", "0=2 1=8")
@@ -222,9 +219,20 @@ fn cases() -> Vec<Case> {
                 &tagged(&[0.1; 12]),
             ]))
             .inputs(Inputs::One(&[4, 4])),
-        Case::new("MultiHeadAttention", "0=2 1=2 2=4")
-            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1]))
-            .parameters_only(),
+        // Attention loads eight blocks: four tagged projection weights and four raw
+        // biases. `2` is the product of the embedding width and the projected width.
+        Case::new("MultiHeadAttention", "0=4 1=2 2=16")
+            .weights(support::blocks(&[
+                &tagged(&[0.25; 16]),
+                &support::raw(&[0.0; 4]),
+                &tagged(&[0.25; 16]),
+                &support::raw(&[0.0; 4]),
+                &tagged(&[0.25; 16]),
+                &support::raw(&[0.0; 4]),
+                &tagged(&[0.25; 16]),
+                &support::raw(&[0.0; 4]),
+            ]))
+            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("SDPA", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("RotaryEmbed", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("DeformableConv2D", "0=1 1=2 11=2 5=0 6=8")
@@ -239,15 +247,12 @@ fn cases() -> Vec<Case> {
                 3,
                 3,
             ),
+        // Copy overwrites the leading corner of the first operand with the smaller one.
         Case::new("CopyTo", "")
-            .inputs(Inputs::Two(&[4, 4, 1], &[4, 4, 1]))
-            .parameters_only(),
-        // The inverse transform aborts in native code about one run in ten even when fed a
-        // spectrum this SDK produced from a valid signal, so the case stops at the
-        // parameter boundary.
-        Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0")
-            .inputs(Inputs::One(&[32, 1, 1]))
-            .parameters_only(),
+            .inputs(Inputs::Two(&[4, 4, 1], &[2, 2, 1])),
+        // The inverse transform reads one channel per frequency bin, so the operand carries
+        // a real and imaginary pair per frame and `n_fft / 2 + 1` bins.
+        Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0").inputs(Inputs::One(&[2, 4, 5])),
     ]
 }
 
@@ -257,13 +262,18 @@ fn tensor(shape: &[usize]) -> ncnn_rust::Mat {
     ncnn_rust::Mat::from_f32(&values, shape).expect("tensor")
 }
 
+/// Assembled graph text, its declared layer and blob counts, the input tensors and the
+/// shapes those tensors were built from.
+type Fixture = (
+    String,
+    usize,
+    usize,
+    Vec<(&'static str, ncnn_rust::Mat)>,
+    Vec<&'static [usize]>,
+);
+
 fn run(case: &Case) -> Result<usize, String> {
-    let (body, mut layers, mut blobs, mut inputs): (
-        String,
-        usize,
-        usize,
-        Vec<(&str, ncnn_rust::Mat)>,
-    ) = match case.inputs {
+    let (body, mut layers, mut blobs, mut inputs, shapes): Fixture = match case.inputs {
         Inputs::Memory => (
             format!(
                 "{} operation 0 1 output {}\n",
@@ -271,6 +281,7 @@ fn run(case: &Case) -> Result<usize, String> {
             ),
             1,
             1,
+            Vec::new(),
             Vec::new(),
         ),
         Inputs::One(shape) => (
@@ -281,6 +292,7 @@ fn run(case: &Case) -> Result<usize, String> {
             2,
             2,
             vec![("input", tensor(shape))],
+            vec![shape],
         ),
         Inputs::Two(a, b) => (
             format!(
@@ -290,6 +302,7 @@ fn run(case: &Case) -> Result<usize, String> {
             3,
             3,
             vec![("a", tensor(a)), ("b", tensor(b))],
+            vec![a, b],
         ),
         Inputs::Three(a, b, c) => (
             format!(
@@ -299,15 +312,12 @@ fn run(case: &Case) -> Result<usize, String> {
             4,
             4,
             vec![("a", tensor(a)), ("b", tensor(b)), ("c", tensor(c))],
+            vec![a, b, c],
         ),
     };
-    if let Some(values) = case.second_values {
-        let shape = match case.inputs {
-            Inputs::Two(_, second) | Inputs::Three(_, second, _) => second,
-            _ => &[],
-        };
-        inputs[1].1 = ncnn_rust::Mat::from_f32(values, shape)
-            .map_err(|error| format!("second operand failed with {error:?}"))?;
+    for &(index, values) in &case.values {
+        inputs[index].1 = ncnn_rust::Mat::from_f32(values, shapes[index])
+            .map_err(|error| format!("operand {index} failed with {error:?}"))?;
     }
     let body = match case.graph {
         Some((graph, graph_layers, graph_blobs)) => {
@@ -317,14 +327,6 @@ fn run(case: &Case) -> Result<usize, String> {
         }
         None => body,
     };
-    if case.tier == Tier::Parameters {
-        let text = format!("7767517\n{layers} {blobs}\n{body}");
-        let mut net =
-            ncnn_rust::Net::new().map_err(|error| format!("net failed with {error:?}"))?;
-        net.load_param(&text)
-            .map_err(|error| format!("parameter load failed with {error:?}"))?;
-        return Ok(0);
-    }
     let net = support::try_graph(layers, blobs, &body, &case.weights)
         .map_err(|error| format!("load failed with {error:?}"))?;
     let mut outputs = net
@@ -387,8 +389,7 @@ fn uncovered_layers_load_and_forward() {
 
     let binary = std::env::current_exe().expect("test binary");
     let mut failures = Vec::new();
-    let mut forwarded = 0;
-    let mut loaded = 0;
+    let mut passed = 0;
     for (index, case) in cases().into_iter().enumerate() {
         if index < start || index >= start + limit {
             continue;
@@ -404,11 +405,7 @@ fn uncovered_layers_load_and_forward() {
             .output()
             .expect("child process");
         if output.status.success() {
-            if case.tier == Tier::Forward {
-                forwarded += 1;
-            } else {
-                loaded += 1;
-            }
+            passed += 1;
             continue;
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -426,7 +423,8 @@ fn uncovered_layers_load_and_forward() {
     }
     assert!(
         failures.is_empty(),
-        "layer case failures ({forwarded} forward, {loaded} load-only):\n{}",
+        "layer case failures ({passed} of {} cases passed):\n{}",
+        cases().len(),
         failures.join("\n")
     );
 }
