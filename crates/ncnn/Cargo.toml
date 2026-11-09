@@ -17,4 +17,4 @@ default = []
 vulkan = ["ncnn-sys/vulkan"]
 
 [dependencies]
-ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.1.1" }
+ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.2.0" }

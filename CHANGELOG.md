@@ -7,6 +7,8 @@ library upgrade is a minor change of this crate.
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-10
+
 ### Added
 
 - `ElementKind`, `Mat::to_f32_typed`, `Mat::to_i8`, `Mat::from_typed` and `Mat::from_i8` read and
