@@ -77,6 +77,20 @@ The `v*` tag ruleset blocks deleting or moving a release tag. Repository setting
 the only merge method, so the merge buttons match the ruleset, and the Dependabot alerts plus
 secret scanning run on every push.
 
+## Labels
+
+`.github/labeler.yml` maps changed paths to labels, and `.github/workflows/labeler.yml` applies
+them through the `pull_request_target` event, which supplies the write token that fork pull
+requests do not receive under the plain `pull_request` event. The workflow never checks out pull
+request code, so untrusted content never runs with that token. `sync-labels` stays off, which
+keeps maintainer labels such as `bug` in place after a later push.
+
+`.github/release.yml` groups generated release notes by the same labels, so `gh release create
+--generate-notes` produces the category list from the labels a pull request carries.
+
+Applying or removing a label requires the triage role or higher. The repository grants write
+access to `Edwardssss` alone, so external contributors cannot label their own pull requests.
+
 ## Formatting
 
 | Language | Tool | Command |

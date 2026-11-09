@@ -1,0 +1,16 @@
+changelog:
+  categories:
+    - title: Safe API
+      labels: [api]
+    - title: Bindings and adapters
+      labels: [sys]
+    - title: Tests
+      labels: [tests]
+    - title: CI and tooling
+      labels: [ci]
+    - title: Documentation
+      labels: [documentation]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ["*"]

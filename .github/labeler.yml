@@ -1,0 +1,35 @@
+api:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/ncnn/src/**
+
+sys:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/ncnn-sys/**
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/ncnn/tests/**
+          - crates/ncnn/examples/**
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+          - ci/**
+          - tools/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - "**/*.md"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - Cargo.toml
+          - Cargo.lock
+          - crates/*/Cargo.toml
