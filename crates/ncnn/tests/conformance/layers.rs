@@ -184,12 +184,17 @@ fn cases() -> Vec<Case> {
         Case::new("PSROIPooling", "0=1 1=1 2=1 3=4")
             .inputs(Inputs::Two(&[8, 8, 4], &[4]))
             .operand(1, &[0., 0., 5., 5.]),
-        // Region alignment samples inside the feature map, so the case passes a region
-        // whose corners sit within the four by four operand.
+        // Region alignment samples a region of four corner coordinates inside the feature
+        // map. The native sampler clamps only the upper corner index, so the case keeps the
+        // sample points strictly inside the four by four operand.
         Case::new("ROIAlign", "0=2 1=2")
-            .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
-            .operand(1, &[0., 0., 0., 2., 2.]),
-        Case::new("PriorBox", "-23300=1,16 9=8 10=8").inputs(Inputs::Two(&[4, 4, 2], &[8, 8, 3])),
+            .inputs(Inputs::Two(&[4, 4, 2], &[4]))
+            .operand(1, &[0.5, 0.5, 2.5, 2.5]),
+        // The box generator reads three arrays; the Vulkan upload path takes `min_sizes`
+        // and `aspect_ratios` unconditionally, so both are present to keep the case valid on
+        // a device as well as on the host.
+        Case::new("PriorBox", "-23300=1,16 -23302=1,1 9=8 10=8")
+            .inputs(Inputs::Two(&[4, 4, 2], &[8, 8, 3])),
         // Detection heads decode locations against priors, so the case supplies a prior
         // pair of box and variance rows plus confidence scores that clear the threshold.
         Case::new("DetectionOutput", "0=2 1=0.05 2=300 3=100 4=0.5")
@@ -450,12 +455,7 @@ fn uncovered_layers_load_and_forward() {
             continue;
         }
         let output = std::process::Command::new(&binary)
-            .args([
-                CHILD_TEST,
-                "--exact",
-                "--test-threads=1",
-                "--nocapture",
-            ])
+            .args([CHILD_TEST, "--exact", "--test-threads=1", "--nocapture"])
             .env("NCNN_LAYER_CASE", case.operation)
             .output()
             .expect("child process");
