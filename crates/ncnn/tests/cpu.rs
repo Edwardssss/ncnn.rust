@@ -697,7 +697,7 @@ fn ergonomic_paths() -> ncnn::Result<()> {
     assert!(sequential
         .outputs_with(&["sum", "product"], |_, _| {
             calls += 1;
-            Err(ncnn::Error::Invalid("consumer stopped"))
+            Err(ncnn::Error::Invalid("consumer stopped".into()))
         })
         .is_err());
     assert_eq!(calls, 1);

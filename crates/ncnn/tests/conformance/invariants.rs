@@ -212,4 +212,42 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
             "element {index}: stored {value}, expected {expected}"
         );
     }
+
+    // The same bytes reach Rust through the whole-request form and through an owned extraction,
+    // and a wrong element kind reports the stored width instead of a native status code.
+    let outputs = quantized
+        .infer_stored(
+            [("input", Mat::from_f32(&values, &[4, 4, 1]).expect("input"))],
+            &["stored"],
+        )
+        .expect("stored inference");
+    assert_eq!(outputs[0].0.elemsize, 1, "stored inference byte width");
+    let inferred = outputs[0].1.to_i8().expect("stored inference values");
+    assert_eq!(inferred, stored, "stored inference bytes");
+
+    let owned = {
+        let mut extractor = quantized.extractor().expect("extractor");
+        extractor
+            .input(
+                Endpoint::Name("input"),
+                Mat::from_f32(&values, &[4, 4, 1]).expect("input"),
+            )
+            .expect("input");
+        extractor
+            .extract_stored_owned(Endpoint::Name("stored"))
+            .expect("owned stored output")
+    };
+    assert_eq!(owned.info().elemsize, 1, "owned stored byte width");
+    assert_eq!(owned.to_i8().expect("owned stored values"), stored);
+
+    let mismatch = Mat::from_i8(&stored, &[3, 3, 1]).expect("typed input");
+    assert_eq!(mismatch.to_i8().expect("typed round trip"), stored);
+    let error = mismatch
+        .to_f32_typed(ElementKind::F32)
+        .expect_err("f32 read of int8 storage");
+    let message = error.to_string();
+    assert!(
+        message.contains("1 bytes per element") && message.contains("matching kind"),
+        "mismatch message named the stored width: {message}"
+    );
 }
