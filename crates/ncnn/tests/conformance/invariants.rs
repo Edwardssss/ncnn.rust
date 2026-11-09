@@ -251,3 +251,59 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
         "mismatch message named the stored width: {message}"
     );
 }
+
+/// Prints the finiteness of each attention configuration. The layer case skips its finiteness
+/// assertion on aarch64 Linux because ncnn builds its own Gemm and Softmax there, so this probe
+/// names the configuration that returns non-finite values; every other target must stay finite.
+#[test]
+fn attention_probe_reports_finiteness() {
+    let arm_linux = cfg!(all(target_arch = "aarch64", target_os = "linux"));
+    for (embed, heads, projected) in [(4, 2, 4), (8, 2, 8), (4, 1, 4)] {
+        let mut parts: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..4 {
+            parts.push(tagged(&vec![0.25; embed * projected]));
+            parts.push(support::raw(&vec![0.0; projected]));
+        }
+        let borrowed: Vec<&[u8]> = parts.iter().map(|part| part.as_slice()).collect();
+        let param = format!(
+            "Input q 0 1 q\nInput k 0 1 k\nInput v 0 1 v\n\
+             MultiHeadAttention attn 3 1 q k v out 0={embed} 1={heads} 2={}\n",
+            embed * projected
+        );
+        let net = support::graph(4, 4, &param, &support::blocks(&borrowed));
+        let operand = || {
+            Mat::from_f32(
+                &(0..embed * 4)
+                    .map(|index| index as f32 * 0.125 + 0.5)
+                    .collect::<Vec<_>>(),
+                &[embed, 4],
+            )
+            .expect("operand")
+        };
+        let output = net
+            .infer(
+                [("q", operand()), ("k", operand()), ("v", operand())],
+                &["out"],
+            )
+            .expect("inference");
+        let values = &output[0].values;
+        let non_finite: Vec<usize> = values
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| !value.is_finite())
+            .map(|(index, _)| index)
+            .collect();
+        eprintln!(
+            "embed={embed} heads={heads} projected={projected}: {} values, non-finite at {:?}, first {:?}",
+            values.len(),
+            non_finite,
+            &values[..values.len().min(8)]
+        );
+        if !arm_linux {
+            assert!(
+                non_finite.is_empty(),
+                "embed={embed} heads={heads} projected={projected} returned non-finite values at {non_finite:?}"
+            );
+        }
+    }
+}

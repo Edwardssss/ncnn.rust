@@ -123,7 +123,7 @@ mod device {
     use std::cell::RefCell;
 
     thread_local! {
-        static DEVICE: RefCell<Option<Device>> = RefCell::new(None);
+        static DEVICE: RefCell<Option<Device>> = const { RefCell::new(None) };
     }
 
     /// Returns the device named by `NCNN_TEST_DEVICE=vulkan`, if any.

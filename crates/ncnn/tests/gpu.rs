@@ -67,7 +67,7 @@ fn sum_net(device: &Device) -> Net {
 }
 
 fn tagged(values: &[f32]) -> Vec<u8> {
-    let mut bytes = vec![0f32.to_le_bytes()].concat();
+    let mut bytes = 0f32.to_le_bytes().to_vec();
     for value in values {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -177,18 +177,20 @@ fn vulkan_surface_contracts() {
         [1., 2., 3., 4.]
     );
 
-    let guard = tensor.guard();
-    assert_eq!(
-        values(&guard.download().expect("guard download")),
-        [1., 2., 3., 4.]
-    );
-    let descriptor = unsafe { guard.buffer_descriptor() }.expect("descriptor");
-    assert_ne!(descriptor.buffer, 0, "buffer handle");
-    assert!(
-        descriptor.capacity >= descriptor.offset + 16,
-        "buffer range"
-    );
-    drop(guard);
+    let descriptor = {
+        let guard = tensor.guard();
+        assert_eq!(
+            values(&guard.download().expect("guard download")),
+            [1., 2., 3., 4.]
+        );
+        let descriptor = unsafe { guard.buffer_descriptor() }.expect("descriptor");
+        assert_ne!(descriptor.buffer, 0, "buffer handle");
+        assert!(
+            descriptor.capacity >= descriptor.offset + 16,
+            "buffer range"
+        );
+        descriptor
+    };
 
     let imported = unsafe {
         allocator.import_buffer(
