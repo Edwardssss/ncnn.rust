@@ -115,6 +115,62 @@ jobs:
           EOF
           cargo publish -p ncnn-rust --dry-run --allow-dirty --config "$RUNNER_TEMP/patch.toml"
 
+  # The publish gate compiles the archive, and this job consumes it: a separate crate
+  # depends on the packaged files, which is the only path that sees the published
+  # manifest, the packaged file list and the runtime library lookup a user gets.
+  packaged:
+    name: Packaged crate build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ncnn SDK
+        id: sdk-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-ubuntu-latest-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
+
+      - name: Fetch pinned ncnn source
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: python3 tools/fetch-ncnn.py
+
+      - name: Build ncnn SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - name: Package both crates
+        run: |
+          cargo package -p ncnn-rust-sys --no-verify
+          cargo package -p ncnn-rust --no-verify
+          mkdir -p "$RUNNER_TEMP/packages"
+          for archive in target/package/*.crate; do
+            tar -xzf "$archive" -C "$RUNNER_TEMP/packages"
+          done
+          ls "$RUNNER_TEMP/packages"
+
+      - name: Build a crate that consumes the archives
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: |
+          sys_dir="$(echo "$RUNNER_TEMP"/packages/ncnn-rust-sys-*)"
+          safe_dir="$(echo "$RUNNER_TEMP"/packages/ncnn-rust-[0-9]*)"
+          crate="$RUNNER_TEMP/downstream"
+          cp -r ci/downstream "$crate"
+          sed -i "s|@SYS@|$sys_dir|; s|@SAFE@|$safe_dir|" "$crate/Cargo.toml.in"
+          mv "$crate/Cargo.toml.in" "$crate/Cargo.toml"
+          cd "$crate"
+          cargo run
+
   msrv:
     name: MSRV 1.85.1
     runs-on: ubuntu-latest

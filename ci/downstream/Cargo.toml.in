@@ -1,0 +1,13 @@
+[package]
+name = "downstream"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ncnn-rust = { path = "@SAFE@" }
+
+# The packaged safe crate names its native dependency by version only, so this
+# patch points that name at the second archive instead of at the registry.
+[patch.crates-io]
+ncnn-rust-sys = { path = "@SYS@" }
