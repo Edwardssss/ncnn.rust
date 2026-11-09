@@ -35,8 +35,6 @@ struct Case {
     graph: Option<(&'static str, usize, usize)>,
     /// Numeric expectation, for layers whose output proves a parameter mapping.
     verify: Option<Check>,
-    /// Skips the finiteness assertion where a platform-specific native path differs.
-    lenient_on_arm_linux: bool,
 }
 
 impl Case {
@@ -50,7 +48,6 @@ impl Case {
             values: Vec::new(),
             graph: None,
             verify: None,
-            lenient_on_arm_linux: false,
         }
     }
 
@@ -82,12 +79,6 @@ impl Case {
 
     fn verify(mut self, verify: fn(&[f32]) -> Result<(), String>) -> Self {
         self.verify = Some(verify);
-        self
-    }
-
-    /// Accepts non-finite values where a platform-specific native path is known to differ.
-    fn lenient_on_arm_linux(mut self) -> Self {
-        self.lenient_on_arm_linux = true;
         self
     }
 }
@@ -268,11 +259,7 @@ fn cases() -> Vec<Case> {
                 &tagged(&[0.25; 16]),
                 &support::raw(&[0.0; 4]),
             ]))
-            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1]))
-            // ncnn's aarch64 attention path runs Gemm and Softmax layers of its own and
-            // returns one non-finite row for this synthetic case on Linux; the x86, Windows
-            // and macOS runs stay finite.
-            .lenient_on_arm_linux(),
+            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("SDPA", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("RotaryEmbed", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("DeformableConv2D", "0=1 1=2 11=2 5=0 6=8")
@@ -398,13 +385,11 @@ fn run(case: &Case) -> Result<usize, String> {
     if values.is_empty() {
         return Err("empty output".into());
     }
-    if !(case.lenient_on_arm_linux && cfg!(all(target_arch = "aarch64", target_os = "linux"))) {
-        if let Some(index) = values.iter().position(|value| !value.is_finite()) {
-            return Err(format!(
-                "non-finite value at index {index} in {:?}",
-                &values[..values.len().min(16)]
-            ));
-        }
+    if let Some(index) = values.iter().position(|value| !value.is_finite()) {
+        return Err(format!(
+            "non-finite value at index {index} in {:?}",
+            &values[..values.len().min(16)]
+        ));
     }
     if let Some(verify) = case.verify {
         verify(&values)?;

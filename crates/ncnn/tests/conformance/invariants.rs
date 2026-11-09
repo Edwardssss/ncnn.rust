@@ -252,12 +252,11 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
     );
 }
 
-/// Prints the finiteness of each attention configuration. The layer case skips its finiteness
-/// assertion on aarch64 Linux because ncnn builds its own Gemm and Softmax there, so this probe
-/// names the configuration that returns non-finite values; every other target must stay finite.
+/// Prints the finiteness of each attention configuration. The three configurations the layer case
+/// and the key/value cache exercise, plus a wider one, must agree with the x86-64 run, so a target
+/// that changes the attention path shows up as a named configuration instead of one case failure.
 #[test]
 fn attention_probe_reports_finiteness() {
-    let arm_linux = cfg!(all(target_arch = "aarch64", target_os = "linux"));
     for (embed, heads, projected) in [(4, 2, 4), (8, 2, 8), (4, 1, 4)] {
         let mut parts: Vec<Vec<u8>> = Vec::new();
         for _ in 0..4 {
@@ -299,11 +298,9 @@ fn attention_probe_reports_finiteness() {
             non_finite,
             &values[..values.len().min(8)]
         );
-        if !arm_linux {
-            assert!(
-                non_finite.is_empty(),
-                "embed={embed} heads={heads} projected={projected} returned non-finite values at {non_finite:?}"
-            );
-        }
+        assert!(
+            non_finite.is_empty(),
+            "embed={embed} heads={heads} projected={projected} returned non-finite values at {non_finite:?}"
+        );
     }
 }
