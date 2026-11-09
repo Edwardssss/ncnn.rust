@@ -91,13 +91,15 @@ GitHub-hosted runners cover these configurations without additional hardware:
 
 | Configuration | Runner | What the job proves |
 |---|---|---|
-| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, workspace tests, example, package verification |
+| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, workspace tests, example, generated model fixtures against a native reference, package verification |
 | Windows x86-64 CPU | `windows-latest` | MSVC build, workspace tests, example, package verification |
 | Linux ARM64 CPU | `ubuntu-24.04-arm` | Native workspace tests |
 | macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
 | macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
 | Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1 |
-| Vulkan | `ubuntu-latest` | Vulkan contracts against Mesa lavapipe (`llvmpipe`) |
+| Vulkan | `ubuntu-latest` | The whole conformance suite plus the Vulkan contracts against Mesa lavapipe, with `NCNN_TEST_DEVICE=vulkan` |
+| Coverage | `ubuntu-latest` | `cargo llvm-cov` line coverage of the wrapper, uploaded as an artifact |
+| Parser fuzzing | `ubuntu-latest` nightly schedule | `cargo fuzz` on the text parameter loader and the bounded weight reader |
 | API documentation | `ubuntu-latest` | `cargo doc --workspace --no-deps` with a built SDK, deployed to <https://edwardssss.github.io/ncnn.rust/> |
 
 The first hosted run of this matrix passed every job on 2026-11-09 for commit `f3bf72b`: Linux

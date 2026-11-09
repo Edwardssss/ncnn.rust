@@ -108,9 +108,23 @@ requests.
 | C++ adapters | clang-format (`.clang-format`) | `clang-format -i crates/ncnn-sys/native/*.cpp crates/ncnn-sys/native/*.h` |
 | Markdown, JSON, YAML | EditorConfig (`.editorconfig`) | Two-space indent, LF, final newline |
 
-`rust-toolchain.toml` pins the stable channel with `rustfmt` and `clippy`. `.gitattributes`
-normalises text files to LF and marks native binaries. Do not reflow unrelated code in a
-functional change, and do not disable a lint without documenting the reason next to it.
+`rust-toolchain.toml` pins the stable channel with `rustfmt` and `clippy`; the MSRV job pins
+1.85.1 separately, so code that relies on a newer language feature breaks that job even when the
+local stable toolchain accepts it. `.gitattributes` normalises text files to LF and marks native
+binaries. Do not reflow unrelated code in a functional change, and do not disable a lint without
+documenting the reason next to it.
+
+## Documentation
+
+`README.md` and `README_zh.md` are the same document in two languages. A change to one lands in the
+same pull request as the matching change to the other, so the two never describe different APIs.
+
+Prose and code comments are written in English as declarative statements about what the code does.
+Text that explains why a reader might be surprised, or that apologises for a limitation, belongs in
+`docs/` next to the contract it qualifies, not in a comment.
+
+`docs/README.md` lists every page. A new page is added to that map, to the documentation list in
+both READMEs and to `CHANGELOG.md` in the same pull request.
 
 ## Versions and releases
 
@@ -125,12 +139,10 @@ release performs these steps:
 3. Run `cargo publish -p ncnn-rust-sys --dry-run` and the matching `ncnn-rust` dry run, which CI
    also performs on every pull request.
 4. `cargo publish -p ncnn-rust-sys`, wait for the index update, then `cargo publish -p ncnn-rust`.
-5. Tag the commit and create the GitHub release with generated notes, so the tag records the
-   published source.
-
-No changelog file is maintained. Release notes come from GitHub Releases, which groups the
-Conventional Commit subjects recorded between two tags, so the commit rules above carry the
-release history.
+5. Move the `Unreleased` entries of `CHANGELOG.md` under the new version heading, add the release
+   date and a fresh empty `Unreleased` section, then tag the commit and create the GitHub release.
+   The GitHub release groups the Conventional Commit subjects recorded between two tags; the
+   changelog records what changed for a reader who upgrades.
 
 The ncnn SDK version is a separate axis. `ci/ncnn-versions.json` records the pinned release, and
 `crates/ncnn-sys/build.rs` rejects an unlisted SDK version unless `NCNN_ALLOW_UNTESTED_VERSION=1`

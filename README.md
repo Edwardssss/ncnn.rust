@@ -83,6 +83,29 @@ let mut buffer = Vec::new();
 ex.extract_into(&output_id, &mut buffer)?;
 ```
 
+Run on a Vulkan device by attaching it before the model is read. Native per-layer CPU fallback stays
+available, so selection is not a guarantee that every layer runs on the GPU:
+
+```rust
+let device = ncnn_rust::gpu::Device::default_device()?;
+let net = Net::builder()?.vulkan(device).load_files("model.param", "model.bin")?;
+```
+
+Quantized and half-precision outputs keep their stored width. `infer` converts to FP32, so read them
+through the stored forms and name the format:
+
+```rust
+let outputs = net.infer_stored([("input", input)], &["output"])?;
+let (info, stored) = &outputs[0];
+println!("{} bytes per element", info.elemsize);
+let bytes: Vec<i8> = stored.to_i8()?;
+```
+
+`Mat::from_typed` and `Mat::from_i8` build the same storage for an input side, and
+`Extractor::extract_stored` borrows it while one extractor runs. The
+[typed tensor example](crates/ncnn/examples/typed_tensors.rs) and the
+[resident Vulkan example](crates/ncnn/examples/vulkan_resident.rs) run end to end.
+
 ## Performance
 
 Wrapper cost is measured against the native C API from the same SDK in one process, so the table
@@ -125,12 +148,18 @@ no ncnn SDK, and the build script compiles C++ adapters against the installed he
 missing `NCNN_INSTALL_DIR` fails before rustdoc starts.
 
 - [Documentation map](docs/README.md)
-- [Safety contracts and API coverage](docs/contracts.md)
+- [Safety contracts](docs/contracts.md)
+- [Native ABI and adapter decisions](docs/native-abi.md)
+- [Layer coverage](docs/layer-coverage.md)
 - [Supported platforms](docs/support-matrix.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Migration notes](docs/migration.md)
 - [Evidence history](docs/evidence-history.md)
 - [Performance](docs/performance.md)
 - [Advanced CPU adapters](docs/advanced-cpu.md)
 - [Model fixtures](docs/model-fixtures.md)
+- [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## License

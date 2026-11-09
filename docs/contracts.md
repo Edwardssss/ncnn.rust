@@ -2,8 +2,9 @@
 
 Each section states one contract area: what the safe API guarantees, which native behaviour it
 relies on, and what remains unsafe. Dated counts, machine details and log paths live in the
-[evidence history](evidence-history.md); the coverage table at the end lists what the test suite
-exercises.
+[evidence history](evidence-history.md). Native adapter decisions and the ABI the wrappers rely on
+are in [native ABI and adapter decisions](native-abi.md); the layer list and known native
+differences are in [layer coverage](layer-coverage.md).
 
 ## Networks and extraction
 
@@ -60,10 +61,6 @@ Raw adoption requires initialized logical elements and live allocator dependenci
 
 The wrapper types remain thread-affine. Native runtime queries are separate from object sharing. CPU worker-affinity changes and raw callback synchronization remain application-managed advanced operations. OS processor identities are value types. Current-thread affinity acts on the caller only, with a group-local mask on Windows; native worker masks retain their upstream capacity and scheduling semantics.
 
-## Adapter ABI
-
-Project adapter names use `ncnn_rs_`. The adapter compiles against the selected installed ncnn headers and links to the matching static or shared native library. Applications supply compatible compiler ABI, CRT, and native runtime dependencies. Adapter functions that allocate C++ objects translate exceptions to status codes or null handles. Upstream C API entry points retain upstream allocation and termination behavior.
-
 ## Vulkan ownership
 
 Optional Vulkan devices share a process-owned native runtime and cached device objects. Initialization is serialized and exit cleanup precedes driver teardown; no safe manual shutdown is exposed. Networks retain their device handles across configuration and clear/reload, and reject selection after parameter loading. Device, network and extractor handles remain single-thread-affine. Raw sys users must not destroy or replace the runtime, devices or Vulkan allocators while wrapper objects or work remain alive. Ordinary inputs use CPU Mat storage and ordinary extraction synchronizes and detaches outputs. CPU extractor guarded views reject GPU networks because their low-copy proof is CPU-only. Completed resident tensor guards use the separate contract below. Native unsupported layers may execute on CPU; Vulkan selection is not an all-GPU guarantee.
@@ -95,98 +92,6 @@ alive and unmodified. `Mat::into_raw` transfers release responsibility, and
 expose native Vulkan objects with the same rule: the caller keeps the underlying storage alive,
 synchronized and unmodified for the whole Rust lifetime of every object derived from it.
 
-## Operator conformance
-
-`crates/ncnn/tests/conformance/` builds its parameters and weights in memory and requires no
-downloaded fixtures. Expected values come from Rust reference loops, so the suite detects native or
-wrapper regressions without a second backend.
-
-- `operators.rs` covers activation, arithmetic, normalisation, softmax, structural, convolution,
-  pooling, interpolation, matrix, rearrangement, one-dimensional, upsampling and reduction
-  families. Each family lists every layer variant it checks, including the high-risk parameter
-  combinations: convolution stride, dilation and fused activation; pooling average, global and
-  strided; interpolation nearest and bilinear; Gemm shape; softmax on three axes.
-- `graphs.rs` covers multi-input, split/concat, residual, pool/split/interp/concat and
-  multi-output topologies, plus repeated-run determinism and packing/FP16 option parity.
-- `allocation.rs` asserts that the reusable-buffer path allocates nothing once warm.
-- `api.rs` reaches the public paths the families do not: file loading, custom readers, parameter
-  dictionaries, unchecked reads, reshape views, the three endpoint forms and concatenated outputs.
-- `invariants.rs` checks pairs that must agree with themselves: `Unfold` with `Fold`, `Split` with
-  `Eltwise`, and the narrow-element conversion against known bit patterns.
-- `layers.rs` holds one case per layer type the SDK registers. Cases run in child processes of the
-  test binary, so a layer that aborts in native code becomes a named failure instead of a lost run.
-  Every case runs one inference and asserts a finite output, which requires the shapes and operand
-  values each forward pass reads: a spectrum carries one channel per frequency bin, and the
-  detection heads decode regions from scores and priors.
-
-Native ncnn enables FP16 packed, storage and arithmetic by default on ARM64 and Apple Silicon, so
-results there round to FP16 before any comparison. The conformance suite pins a single-threaded
-FP32 pipeline and leaves the non-default pipelines to `packing_and_fp16_options_preserve_values`.
-
-Weights use two block forms because ncnn reads `type = 0` blocks with a leading zero tag and
-`type = 1` blocks without one; `support.rs` provides both constructors. Layers that require an
-external blob, such as `CopyTo`, stay out of the suite because a single-input graph does not
-satisfy their contract. The campaign harness kept outside this repository remains the source for
-trained-model accuracy and native-reference timings; [performance](performance.md) lists the
-in-repo commands that exercise the same paths.
-
-## Coverage
-
-| Domain | Available interface | Validation and remaining scope |
-|---|---|---|
-| Version and CPU count | Safe functions | Local CPU suite |
-| Text parameters and binary weights | Safe string/file/byte loaders; unsafe native mapped-path loading | Tiny graphs, bounded short reads, native mapped model inference and Unicode paths |
-| Binary parameters | Safe bounded byte loader; raw file/reader APIs | Successful binary Input graph and truncated input covered |
-| Multi-input/output inference | Safe name/index input, detached extraction and exclusive read-only output guards | Native C++ scalar comparison; NanoDet/OCR all-output equivalence; repeated extraction, detached lifetimes, guard pointer identity, light mode/pool/packing combinations and independent extractor aliases |
-| CPU options | Safe typed option keys plus raw C access | All 18 fields compared with C++; 17 trained-model profiles plus 25 generated INT8/operator/shape/reload cases cover observable precision, guarded conversion, packing, threads, algorithms, pooling, light mode and native mapped loading |
-| Tensor creation | Safe FP32 dimensions 1 to 4; raw batch/external/typed creation | Shape rejection and padded 4D copying covered |
-| Tensor transforms | Safe deep copy, reshape and normalization | Shared-input independence and logical element copying covered |
-| FP16/BF16/FP8/INT8 storage | Raw typed tensors, scalar and tensor casts, quantization helpers | FP16/BF16 roundtrip, E4M3/E5M2 scalar encodings, BF16 model storage, INT8 inference and numeric quantize/dequantize/requantize covered |
-| Images | Safe pixel import, resize and orientation; 70 raw public helper overloads | Pixel import, rotation, resize, matrix, YUV, strided guard bytes, affine and drawing cases |
-| ParamDict | Safe scalar/array setters and byte strings | Scalar, byte-string roundtrip and bounds covered |
-| DataReader | Copying binary reader and owned bounded native memory reader | Exact/short reads, bounded text scan, reference bounds covered |
-| ModelBin | Owned array adapter and raw reader/callback loaders | Weighted layer survives ModelBin destruction; dimensions 1 to 4, cursor exhaustion and retained outputs covered |
-| CPU allocator | Pool RAII, tuning and clearing; raw unlocked/external hooks | Outstanding allocation survives clear; allocation/free/clear covered |
-| Standalone layer | Owned layer and pipeline, unsafe loading/forward | ReLU and weighted InnerProduct; multi-tensor/in-place forms available in sys |
-| Custom layers | Checked registration bridge, INT8/batch flags, raw callbacks | Failures, partial outputs, contained panic, pipeline cleanup, failed graph loading, concurrent networks and destruction counts |
-| Border and packing | Raw C API | Border dimensions, packing roundtrip and flattened output conversion covered |
-| Public CPU C++ extras | Runtime controls, bounded CpuSet, OS processor groups, dynamic affinity, raw extraction, views and graph metadata | Actual pin/query/restore, native mask boundaries, physical-core counts, denormal arithmetic/native no-op behavior, views and extractor lifetime covered |
-| External native installations | Required SDK prefix, static/shared selection, explicit extra libraries | Linux and Windows static/shared installations pass CPU calls and independent native model comparisons |
-
-## Upstream adapter decisions
-
-- Extractor option assignment in this release is a no-op. High-level configuration applies to the network before loading.
-- C extraction creates an output handle on failure. Rust releases it before returning an error.
-- The C Mat-array ModelBin constructor passes a temporary vector's storage to a retaining reader. The project adapter owns its vector.
-- The built-in layer C load-model callback treats a C handle as a C++ ModelBin object. The project adapter unwraps `pthis` explicitly.
-- The native custom-layer bridge dereferences every output on callback failure. Project registration supplies owned empty handles for missing outputs, preserves failure codes, and rejects empty successful outputs.
-- The pinned Linux topology implementation encodes sibling IDs in an integer, which truncates masks wider than 32 bits. `tools/patches/ncnn-20261020-cpu-siblings.patch` retains canonical kernel sibling strings for physical-core and cache accounting without changing the native ABI, and `tools/build-ncnn-sdk.py` applies it.
-- The pinned Vulkan `Cast` layer advertises every conversion although only FP32 and FP16 shaders exist. `tools/patches/ncnn-20261020-vulkan-cast-capability.patch` limits Vulkan support to those pairs, so other conversions fall back to CPU instead of running an absent shader.
-- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays, and the defect is reported upstream as Tencent/ncnn#7259.
-- `MultiHeadAttention` on Linux aarch64 takes ncnn's ARM path, which builds its own Gemm and Softmax layers; this synthetic case returns one non-finite output row there while the x86-64, Windows and macOS runs stay finite. The layer case therefore asserts finiteness everywhere except that target.
-
-## Runtime validation and topology scope
-
-Runtime coverage spans four link and CRT combinations with the same tests and models: Linux shared
-with simpleomp, Linux static with GCC OpenMP, Windows shared with the dynamic CRT, and Windows
-static with the static CRT. Each installation compares every trained-model output name, layout and
-value against an independent C++ reference, and compares the 18 option fields separately.
-[Model fixtures](model-fixtures.md) lists the cases; the [evidence history](evidence-history.md#runtime-and-topology-campaign)
-records counts, paths and memory results.
-
-The compact suite keeps one integration entry point plus the compile-fail ownership and view checks:
-extractor reuse, escaping the extractor, escaping a guard slice, owned-handle escape, dropping an
-extractor before an unused guard, and escaping a sequential callback slice. It also covers callback
-failures with partial outputs, contained panics, partial pipeline destruction, concurrent
-registrations, reader and model cursor state, and detached output lifetime.
-
-OS topology interfaces preserve Linux kernel CPU IDs and Windows group/index pairs. Linux affinity
-storage grows dynamically. Native `CpuSet` keeps the upstream fixed-mask and worker semantics, while
-the separate OS API controls the calling thread and uses one Windows group per call. Multi-group
-Windows execution, NUMA behavior, large-machine throughput and additional processor topologies
-remain hardware characterization work; [advanced CPU adapters](advanced-cpu.md) records these
-contracts. Application-level accuracy evaluation uses downstream datasets and preprocessing.
-
 ## Optional Vulkan coverage
 
 The feature-gated adapter covers initialization, device enumeration and metadata, validity, explicit
@@ -210,3 +115,9 @@ pinned native API. Labeled task metrics and macOS/ARM64 Vulkan execution remain 
 [evidence history](evidence-history.md#vulkan-coverage) records the executed contracts, and the
 [trained-model evidence](model-fixtures.md#windows-vulkan-trained-model-evidence) records commands
 and logs.
+
+## Related pages
+
+- [native-abi.md](native-abi.md) records the adapter ABI, the upstream decisions and the runtime validation scope.
+- [layer-coverage.md](layer-coverage.md) records the conformance cases, the coverage table and the known native differences.
+- [troubleshooting.md](troubleshooting.md) maps symptoms to fixes.
