@@ -34,6 +34,7 @@ impl BlobId {
 
 /// Selects a graph endpoint by name, exposed index or resolved token.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum Endpoint<'a> {
     /// Looks the endpoint up by blob name.
     Name(&'a str),

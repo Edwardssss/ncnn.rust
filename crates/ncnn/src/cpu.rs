@@ -4,6 +4,7 @@ use std::{ffi::c_void, marker::PhantomData, rc::Rc};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(i32)]
+#[non_exhaustive]
 /// Identifies one native CPU capability query.
 pub enum CpuQuery {
     /// Counts logical processors.
