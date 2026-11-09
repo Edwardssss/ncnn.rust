@@ -4,6 +4,15 @@ Rust CPU and optional Vulkan inference interfaces for an externally installed nc
 The companion `ncnn-rust-sys` package provides raw bindings and C ABI adapters; this package
 re-exports them as `ncnn_rust::sys`.
 
+## Install
+
+```sh
+cargo add ncnn-rust
+```
+
+The crate ships Rust code only. Building it compiles the C ABI adapters against an ncnn 20261020
+SDK that the build environment supplies.
+
 ## Build environment
 
 Set `NCNN_INSTALL_DIR` to a matching SDK with `include/ncnn` and `lib` or `lib64`.

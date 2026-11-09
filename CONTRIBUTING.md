@@ -101,8 +101,9 @@ release performs these steps:
    `cargo metadata`.
 3. Run `cargo publish -p ncnn-rust-sys --dry-run` and the matching `ncnn-rust` dry run, which CI
    also performs on every pull request.
-4. Tag the commit and create the GitHub release with generated notes.
-5. `cargo publish -p ncnn-rust-sys`, wait for the index update, then `cargo publish -p ncnn-rust`.
+4. `cargo publish -p ncnn-rust-sys`, wait for the index update, then `cargo publish -p ncnn-rust`.
+5. Tag the commit and create the GitHub release with generated notes, so the tag records the
+   published source.
 
 No changelog file is maintained. Release notes come from GitHub Releases, which groups the
 Conventional Commit subjects recorded between two tags, so the commit rules above carry the

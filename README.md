@@ -19,6 +19,15 @@ The repository contains two packages:
   commands, completed guards, buffer import and persistent pipeline caches.
 - Explicit native configuration mapping without Rust-side hardware gating.
 
+## Install
+
+```sh
+cargo add ncnn-rust
+```
+
+The crates ship Rust code only. Building them compiles the C++ adapters against an ncnn SDK that
+the build environment supplies, so the next section sets that SDK up.
+
 ## Build
 
 Cargo consumes an externally installed ncnn SDK. `NCNN_INSTALL_DIR` is required and must
