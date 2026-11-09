@@ -16,7 +16,10 @@ SDK that the build environment supplies.
 ## Build environment
 
 Set `NCNN_INSTALL_DIR` to a matching SDK with `include/ncnn` and `lib` or `lib64`.
-`NCNN_LINK_KIND` selects `static` (default) or `dylib`. `NCNN_EXTRA_LIBS` supplies comma-separated
+`NCNN_LINK_KIND` selects `static` (default) or `dylib`. A shared SDK also needs the directory that
+holds the shared library on the runtime loader path: `lib` on Unix, and the `bin` directory that
+CMake installs `ncnn.dll` into on Windows, where a static and an import library share the
+`ncnn.lib` name. `NCNN_EXTRA_LIBS` supplies comma-separated
 native runtime dependencies in link order, optionally using `static=` or `dylib=` prefixes, such as
 `gomp` for a GCC OpenMP static SDK. `NCNN_EXTRA_LIB_DIRS` supplies existing dependency library
 directories separated by the platform path separator. Cargo compiles the adapters and generates

@@ -60,6 +60,21 @@ fn main() {
     for path in [include.join("platform.h"), lib.join(library_name)] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
+    // MSVC names both a static library and an import library ncnn.lib, so a shared
+    // SDK links silently even when the static default was asked for. Report the
+    // mismatch here instead of at the first missing-DLL launch.
+    if target.contains("windows") && link_kind == "static" {
+        let shared = [prefix.join("bin/ncnn.dll"), prefix.join("lib/ncnn.dll")]
+            .into_iter()
+            .find(|path| path.is_file());
+        if let Some(dll) = shared {
+            println!(
+                "cargo:warning={} ships a shared ncnn library, so this build links ncnn.dll; set NCNN_LINK_KIND=dylib and put {} on PATH",
+                prefix.display(),
+                dll.parent().expect("ncnn.dll has a parent").display()
+            );
+        }
+    }
     let platform =
         std::fs::read_to_string(include.join("platform.h")).expect("Installed platform.h");
     for flag in [
