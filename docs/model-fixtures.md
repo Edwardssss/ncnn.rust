@@ -34,7 +34,7 @@ The script pins source revisions and SHA-256 hashes. Assets stay in ignored `tar
 
 Conversion repositories supply the actual asset files. Their repository license endpoints did not provide a separate asset license during this session; downstream redistributors review model terms separately. This workspace keeps those files outside its published source.
 
-Rust and standalone C++ executions generate the same nonzero FP32 input, with logical element `i` equal to `(((i * 17 + 3) % 251) - 125) / 64`. The C++ process reports all 18 native option fields for comparison with Rust's typed getters. Each profile also probes a convolution intermediate in native layout, making actual 16-bit versus 32-bit storage observable.
+Rust and standalone C++ executions generate the same nonzero FP32 input, with logical element `i` equal to `(((i * 17 + 3) % 251) - 125) / 64`. The C++ process reports the 18 option keys the profiles configure, and Rust compares them through its typed getters; the remaining keys are covered by the option tests. Each profile also probes a convolution intermediate in native layout, making actual 16-bit versus 32-bit storage observable.
 
 | Profile | Configuration |
 |---|---|

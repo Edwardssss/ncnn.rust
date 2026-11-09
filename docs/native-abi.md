@@ -23,7 +23,7 @@ Project adapter names use `ncnn_rs_`. The adapter compiles against the selected 
 Runtime coverage spans four link and CRT combinations with the same tests and models: Linux shared
 with simpleomp, Linux static with GCC OpenMP, Windows shared with the dynamic CRT, and Windows
 static with the static CRT. Each installation compares every trained-model output name, layout and
-value against an independent C++ reference, and compares the 18 option fields separately.
+value against an independent C++ reference, and compares the 18 option keys those profiles configure separately.
 [Model fixtures](model-fixtures.md) lists the cases; the [evidence history](evidence-history.md#runtime-and-topology-campaign)
 records counts, paths and memory results.
 
