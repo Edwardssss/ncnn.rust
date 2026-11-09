@@ -162,7 +162,8 @@ in-repo commands that exercise the same paths.
 - The native custom-layer bridge dereferences every output on callback failure. Project registration supplies owned empty handles for missing outputs, preserves failure codes, and rejects empty successful outputs.
 - The pinned Linux topology implementation encodes sibling IDs in an integer, which truncates masks wider than 32 bits. `tools/patches/ncnn-20261020-cpu-siblings.patch` retains canonical kernel sibling strings for physical-core and cache accounting without changing the native ABI, and `tools/build-ncnn-sdk.py` applies it.
 - The pinned Vulkan `Cast` layer advertises every conversion although only FP32 and FP16 shaders exist. `tools/patches/ncnn-20261020-vulkan-cast-capability.patch` limits Vulkan support to those pairs, so other conversions fall back to CPU instead of running an absent shader.
-- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays; `PriorBox` therefore requires `aspect_ratios` whenever the network enables Vulkan.
+- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays, and the defect is reported upstream as Tencent/ncnn#7259.
+- `MultiHeadAttention` on Linux aarch64 takes ncnn's ARM path, which builds its own Gemm and Softmax layers; this synthetic case returns one non-finite output row there while the x86-64, Windows and macOS runs stay finite. The layer case therefore asserts finiteness everywhere except that target.
 
 ## Runtime validation and topology scope
 
