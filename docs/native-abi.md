@@ -8,7 +8,6 @@ campaigns reach. The [safety contracts](contracts.md) page covers what the safe 
 
 Project adapter names use `ncnn_rs_`. The adapter compiles against the selected installed ncnn headers and links to the matching static or shared native library. Applications supply compatible compiler ABI, CRT, and native runtime dependencies. Adapter functions that allocate C++ objects translate exceptions to status codes or null handles. Upstream C API entry points retain upstream allocation and termination behavior.
 
-
 ## Upstream adapter decisions
 
 - Extractor option assignment in this release is a no-op. High-level configuration applies to the network before loading.
