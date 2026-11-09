@@ -89,10 +89,12 @@ keeps maintainer labels such as `bug` in place after a later push.
 --generate-notes` produces the category list from the labels a pull request carries.
 
 Issues carry free-form text, so `.github/workflows/issue-labeler.yml` classifies them from the
-words a report uses. `.github/issue-labeler.yml` holds one pattern list per label: `bug`,
+words a report uses. `.github/issue-labeler.yml` holds one regular expression per label: `bug`,
 `enhancement`, `documentation`, `question`, `performance`, `build`, `vulkan`, the four
-`platform:*` labels, `needs-repro` and `needs-info`. A label applies when any pattern matches the
-title or the body, and matching labels stay in place until a maintainer removes them.
+`platform:*` labels, `needs-repro` and `needs-info`. The action matches the title and the body and
+joins several entries for one label with AND, so alternatives belong inside a single
+case-insensitive expression of the `/pattern/i` form. Matching labels stay in place until a
+maintainer removes them.
 
 Applying or removing a label requires the triage role or higher. The repository grants write
 access to `Edwardssss` alone, so external contributors cannot label their own issues or pull
