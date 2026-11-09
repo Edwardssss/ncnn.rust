@@ -36,11 +36,19 @@ whether a 16-bit element is IEEE half or bfloat16, so the caller names the forma
 the signed 8-bit values of a quantized tensor. `OutputGuard` exposes both methods, which makes a
 quantized blob readable without an FP32 copy on the Rust side.
 
+ncnn pads every channel plane to a 64-byte boundary, so a tensor with fewer than sixteen FP32
+elements per plane carries padding between planes. `channel_f32` and the copying readers skip that
+padding, while layers that read a whole tensor through one pointer take the values from the first
+plane only. A region of interest therefore belongs in a one-dimensional tensor or in the first plane
+of a two-dimensional one, and a five-channel tensor of single-element planes reaches the layer as
+padding.
+
 Extraction converts packed, FP16, BF16 and INT8 storage to FP32 unless the caller asks for stored
 storage. `Extractor::extract_stored` keeps the layout the producing layer wrote, so `TensorInfo`
 reports the stored element width and the typed readers apply, while `extract` and the owned forms
-return converted FP32 values. Stored extraction uses the CPU guarded borrow, so it rejects GPU
-networks; GPU users read converted values or the resident-recording outputs.
+return converted FP32 values. The guarded borrow needs safe configuration and built-in layers; it
+also serves Vulkan networks, whose extraction downloads into network-owned CPU storage and detaches
+that copy from the pool allocator.
 
 Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
 
@@ -154,8 +162,7 @@ in-repo commands that exercise the same paths.
 - The native custom-layer bridge dereferences every output on callback failure. Project registration supplies owned empty handles for missing outputs, preserves failure codes, and rejects empty successful outputs.
 - The pinned Linux topology implementation encodes sibling IDs in an integer, which truncates masks wider than 32 bits. `tools/patches/ncnn-20261020-cpu-siblings.patch` retains canonical kernel sibling strings for physical-core and cache accounting without changing the native ABI, and `tools/build-ncnn-sdk.py` applies it.
 - The pinned Vulkan `Cast` layer advertises every conversion although only FP32 and FP16 shaders exist. `tools/patches/ncnn-20261020-vulkan-cast-capability.patch` limits Vulkan support to those pairs, so other conversions fall back to CPU instead of running an absent shader.
-- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture therefore supplies both arrays.
-- `ROIAlign` clamps only the upper bilinear index, so a degenerate region whose corners meet reads past the feature map and the resulting fault surfaces as an aborted process. The conformance fixture keeps its sample points strictly inside the operand.
+- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays; `PriorBox` therefore requires `aspect_ratios` whenever the network enables Vulkan.
 
 ## Runtime validation and topology scope
 
@@ -185,12 +192,14 @@ The feature-gated adapter covers initialization, device enumeration and metadata
 pre-load network selection, and synchronous CPU-Mat inference. Safe resident tensor, allocator and
 recording-command ownership, completed tensor guards, pipeline-cache persistence and unsafe
 same-device buffer imports are implemented. Cache tests reject truncation, header corruption and
-payload hash corruption. CPU extractor guards remain CPU-only.
+payload hash corruption. FP32 extractor guards remain CPU-only; stored extraction also serves device
+networks.
 
 `NCNN_TEST_DEVICE=vulkan` attaches the default device to every conformance fixture, so the operator
-families, the graph pairs and all 108 layer cases repeat on the GPU. One contract compares a
-quantized convolution, whose int8 weight scale pushes `0.25` below one quantization step, against the
-float run on the host and against the device and resident-recording results.
+families, the graph pairs and all 108 layer cases repeat on the GPU. One contract compares
+`Convolution`, `ConvolutionDepthWise` and `InnerProduct` with int8 weights, whose scale pushes `0.25`
+below one quantization step, against the float run on the host and against the device and
+resident-recording results, and reads the quantized bytes back through stored extraction.
 
 Native per-layer CPU fallback stays available, so device selection is not proof of GPU placement for
 every layer. True nonblocking submission and caller-owned `VkDevice` adoption are unavailable in the

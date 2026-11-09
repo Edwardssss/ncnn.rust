@@ -80,16 +80,22 @@ impl Extractor<'_> {
         }
         Ok(())
     }
-    fn ensure_borrowable(&self) -> Result<()> {
+    fn ensure_borrowable(&self, stored: bool) -> Result<()> {
         if self._net.guard.extractors.get() != 1 || self._net.guard.output_borrowed.get() {
             return Err(Error::Invalid(
                 "Scoped output requires the network's only live extractor",
             ));
         }
         if !self.low_copy.get() || !self._net.guard.low_copy.get() {
-            return Err(Error::Invalid(
-                "Low-copy outputs require safe configuration and built-in layers without raw-handle export",
-            ));
+            // A device network downloads into its own CPU blob storage and detaches that copy
+            // from the pool allocator, so a stored borrow is as safe there as on the host while
+            // the FP32-converting guard path stays CPU-only.
+            let device_stored = stored && self.low_copy.get() && self._net.has_device();
+            if !device_stored {
+                return Err(Error::Invalid(
+                    "Low-copy outputs require safe configuration and built-in layers without raw-handle export",
+                ));
+            }
         }
         Ok(())
     }
@@ -171,7 +177,7 @@ impl Extractor<'_> {
     }
     /// Borrows eligible CPU output through a scoped guard.
     pub fn extract<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<OutputGuard<'_>> {
-        self.ensure_borrowable()?;
+        self.ensure_borrowable(false)?;
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, false)?;
         self._net.guard.output_borrowed.set(true);
@@ -191,7 +197,7 @@ impl Extractor<'_> {
         &mut self,
         endpoint: impl Into<Endpoint<'a>>,
     ) -> Result<OutputGuard<'_>> {
-        self.ensure_borrowable()?;
+        self.ensure_borrowable(true)?;
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, true)?;
         self._net.guard.output_borrowed.set(true);

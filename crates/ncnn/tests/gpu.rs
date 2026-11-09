@@ -7,13 +7,38 @@
 //! Vulkan device skips every case.
 
 use ncnn_rust::gpu::Device;
-use ncnn_rust::{Mat, Net};
+use ncnn_rust::{Endpoint, Mat, Net};
 
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
-const FLOAT_CONVOLUTION: &str =
-    "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4\n";
-const QUANTIZED_CONVOLUTION: &str =
-    "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4 8=1\n";
+const FLOAT_LAYERS: [(&str, &str); 1] = [(
+    "Convolution",
+    "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4\n",
+)];
+/// Quantized variants: int8 weight storage with one weight scale per output channel and one
+/// input scale. The weight scale leaves `0.25` below one int8 step, so a quantized run differs
+/// from the float run and both devices must agree.
+const QUANTIZED_LAYERS: [(&str, &str, &[usize]); 3] = [
+    (
+        "Convolution",
+        "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4 8=1\n",
+        &[4, 4, 1],
+    ),
+    (
+        "ConvolutionDepthWise",
+        "7767517\n2 2\nInput input 0 1 input\nConvolutionDepthWise conv 1 1 input output 0=1 1=2 3=1 5=0 6=4 7=1 8=1\n",
+        &[4, 4, 1],
+    ),
+    (
+        "InnerProduct",
+        "7767517\n2 2\nInput input 0 1 input\nInnerProduct ip 1 1 input output 0=1 1=0 2=4 8=1\n",
+        &[4],
+    ),
+];
+const WEIGHT_SCALE: f32 = 3.0;
+/// The quantized convolution followed by one-byte storage, so the stored bytes are readable.
+const QUANTIZED_STORAGE: &str = "7767517\n3 3\nInput input 0 1 input\n\
+     Convolution conv 1 1 input scaled 0=1 1=2 5=0 6=4 8=1\n\
+     Quantize quantize 1 1 scaled stored 0=1\n";
 const CONVOLUTION_INPUT: [f32; 16] = [
     -3.0, -2.75, -2.5, -2.25, -2.0, -1.75, -1.5, -1.25, -1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5,
     0.75,
@@ -44,16 +69,12 @@ fn raw(values: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// A one-channel two by two convolution, with int8 weight storage when `quantized`.
-fn convolution_net(device: Option<&Device>, quantized: bool) -> Net {
-    let (body, weights) = if quantized {
-        (
-            QUANTIZED_CONVOLUTION,
-            [tagged(&[0.25; 4]), raw(&[3.0]), raw(&[1.0])].concat(),
-        )
-    } else {
-        (FLOAT_CONVOLUTION, tagged(&[0.25; 4]))
-    };
+/// One float weight block, one output-channel scale and one input scale.
+fn quantized_weights() -> Vec<u8> {
+    [tagged(&[0.25; 4]), raw(&[WEIGHT_SCALE]), raw(&[1.0])].concat()
+}
+
+fn single_layer(body: &str, weights: &[u8], device: Option<&Device>) -> Net {
     let builder = Net::builder()
         .expect("builder")
         .threads(1)
@@ -62,12 +83,29 @@ fn convolution_net(device: Option<&Device>, quantized: bool) -> Net {
         Some(device) => builder.vulkan(device.clone()),
         None => builder,
     }
-    .load_bytes(body, &weights)
+    .load_bytes(body, weights)
     .expect("load")
+}
+
+fn convolution_net(device: Option<&Device>, quantized: bool) -> Net {
+    if quantized {
+        single_layer(QUANTIZED_LAYERS[0].1, &quantized_weights(), device)
+    } else {
+        single_layer(FLOAT_LAYERS[0].1, &tagged(&[0.25; 4]), device)
+    }
 }
 
 fn values(mat: &Mat) -> Vec<f32> {
     mat.to_f32().expect("cpu values")
+}
+
+fn conv_input_of(shape: &[usize]) -> Mat {
+    let count = shape.iter().product::<usize>();
+    Mat::from_f32(&CONVOLUTION_INPUT[..count], shape).expect("convolution input")
+}
+
+fn conv_input() -> Mat {
+    conv_input_of(&[4, 4, 1])
 }
 
 fn close(actual: &[f32], expected: [f32; 3], label: &str) {
@@ -166,41 +204,71 @@ fn vulkan_surface_contracts() {
     );
     drop(outputs);
 
-    // A quantized convolution reads a float weight block followed by one scale per output
-    // channel and one input scale. The weight scale leaves `0.25` below one int8 step, so a
-    // quantized run has to differ from the float run and still agree between host and device.
-    let input = || Mat::from_f32(&CONVOLUTION_INPUT, &[4, 4, 1]).expect("convolution input");
+    // Quantized layers read a float weight block followed by one scale per output channel and
+    // one input scale. The weight scale leaves `0.25` below one int8 step, so a quantized run
+    // has to differ from the float run and still agree between host and device.
     let float_run = convolution_net(None, false)
-        .infer([("input", input())], &["output"])
+        .infer([("input", conv_input())], &["output"])
         .expect("float convolution")
         .remove(0)
         .values;
-    let host_run = convolution_net(None, true)
-        .infer([("input", input())], &["output"])
-        .expect("quantized convolution")
-        .remove(0)
-        .values;
-    let quantized_net = convolution_net(Some(&device), true);
-    let device_run = quantized_net
-        .infer([("input", input())], &["output"])
-        .expect("device quantized convolution")
-        .remove(0)
-        .values;
-    assert!(
-        (host_run[0] - float_run[0]).abs() > 0.5,
-        "quantized weights must change the result: {} vs {}",
-        host_run[0],
-        float_run[0]
-    );
-    for (index, (device_value, host_value)) in device_run.iter().zip(&host_run).enumerate() {
+    for (label, body, shape) in QUANTIZED_LAYERS {
+        let weights = quantized_weights();
+        let host_run = single_layer(body, &weights, None)
+            .infer([("input", conv_input_of(shape))], &["output"])
+            .expect("quantized host run")
+            .remove(0)
+            .values;
+        let device_run = single_layer(body, &weights, Some(&device))
+            .infer([("input", conv_input_of(shape))], &["output"])
+            .expect("quantized device run")
+            .remove(0)
+            .values;
         assert!(
-            (device_value - host_value).abs() <= 1e-2,
-            "quantized convolution index {index}: {device_value} != {host_value}"
+            (host_run[0] - float_run[0]).abs() > 0.5,
+            "{label}: quantized weights must change the result: {} vs {}",
+            host_run[0],
+            float_run[0]
         );
+        for (index, (device_value, host_value)) in device_run.iter().zip(&host_run).enumerate() {
+            assert!(
+                (device_value - host_value).abs() <= 1e-2,
+                "{label} index {index}: {device_value} != {host_value}"
+            );
+        }
     }
 
+    // The quantized graph keeps one byte per element after `Quantize`, and a device network
+    // downloads that copy before the guarded borrow, so the stored bytes are readable there.
+    let storage_weights = [quantized_weights(), raw(&[1.0])].concat();
+    let device_storage = single_layer(QUANTIZED_STORAGE, &storage_weights, Some(&device));
+    let stored = {
+        let mut extractor = device_storage.extractor().expect("device extractor");
+        extractor
+            .input(Endpoint::Name("input"), conv_input())
+            .expect("device input");
+        let guard = extractor
+            .extract_stored(Endpoint::Name("stored"))
+            .expect("device stored output");
+        assert_eq!(guard.info().elemsize, 1, "device storage width");
+        guard.to_i8().expect("device stored bytes")
+    };
+    let host_storage = single_layer(QUANTIZED_STORAGE, &storage_weights, None);
+    let host_stored = {
+        let mut extractor = host_storage.extractor().expect("host extractor");
+        extractor
+            .input(Endpoint::Name("input"), conv_input())
+            .expect("host input");
+        let guard = extractor
+            .extract_stored(Endpoint::Name("stored"))
+            .expect("host stored output");
+        guard.to_i8().expect("host stored bytes")
+    };
+    assert_eq!(stored, host_stored, "device and host stored bytes");
+    let quantized_net = convolution_net(Some(&device), true);
+
     let uploaded = allocator
-        .upload(&input())
+        .upload(&conv_input())
         .expect("upload convolution input");
     let mut quantized_command = allocator
         .command(&quantized_net)
@@ -217,7 +285,12 @@ fn vulkan_surface_contracts() {
             .download()
             .expect("quantized output"),
     );
-    for (index, (resident_value, host_value)) in resident_run.iter().zip(&host_run).enumerate() {
+    let host_conv = single_layer(QUANTIZED_LAYERS[0].1, &quantized_weights(), None)
+        .infer([("input", conv_input())], &["output"])
+        .expect("quantized host run")
+        .remove(0)
+        .values;
+    for (index, (resident_value, host_value)) in resident_run.iter().zip(&host_conv).enumerate() {
         assert!(
             (resident_value - host_value).abs() <= 1e-2,
             "resident quantized convolution index {index}: {resident_value} != {host_value}"

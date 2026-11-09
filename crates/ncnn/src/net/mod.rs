@@ -147,6 +147,17 @@ impl Net {
     pub fn vulkan_device(&self) -> Option<&crate::gpu::Device> {
         self.device.as_ref()
     }
+    /// Reports whether a device was selected, independent of the enabled features.
+    pub(crate) fn has_device(&self) -> bool {
+        #[cfg(feature = "vulkan")]
+        {
+            self.device.is_some()
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            false
+        }
+    }
     /// Starts a builder with default options.
     pub fn builder() -> Result<NetBuilder> {
         Ok(NetBuilder {
