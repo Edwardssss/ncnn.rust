@@ -129,7 +129,8 @@ CI builds ncnn from source on Linux x86-64, Linux ARM64, Windows, macOS x86-64 a
 Silicon, then runs formatting, Clippy, the workspace tests, the example, a publish dry run for both
 packages and a build of a separate crate that depends on the packaged archives.
 Separate jobs check the declared minimum Rust version and run the Vulkan contracts against the
-Mesa lavapipe software device. The contracts cover device selection, allocator accounting,
+Mesa lavapipe software device, compare the public API with the published release, and resolve every
+documentation link and anchor without network access. The contracts cover device selection, allocator accounting,
 resident inference, guard descriptors, external buffer import, pipeline caches and cross-device
 rejection, and the same device repeats the whole conformance suite. A coverage job reports line
 coverage of the wrapper, and a nightly workflow fuzzes the text parameter loader and the bounded

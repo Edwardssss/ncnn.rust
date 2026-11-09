@@ -42,7 +42,8 @@ Include the exact commands and their outcomes. Changes to inference behaviour, o
 contracts or the native adapter require:
 
 - `cargo fmt --all -- --check`
-- `cargo clippy --workspace --all-targets --features vulkan -- -D warnings`
+- `cargo clippy --workspace --all-targets -- -D warnings` and the same command with
+  `--features vulkan`, which covers the feature-gated test code
 - `cargo test --workspace --features vulkan` plus the CPU-only workspace test
 - An SDK built by `tools/build-ncnn-sdk.py`, which applies `tools/patches/`; rerun the affected
   contract and comparison evidence after changing a patch
@@ -126,23 +127,56 @@ Text that explains why a reader might be surprised, or that apologises for a lim
 `docs/README.md` lists every page. A new page is added to that map, to the documentation list in
 both READMEs and to `CHANGELOG.md` in the same pull request.
 
+## Dependencies
+
+Two axes move independently, and each lands as its own pull request so a failure names one change.
+
+- **Crate dependencies.** `.github/workflows/dependabot-auto-merge.yml` approves patch and minor
+  Dependabot pull requests and arms auto-merge; major updates wait for a maintainer. `Cargo.lock` is
+  committed and updated with the change that requires it, so a lock-only pull request states which
+  dependency forced the update. The `ncnn-rust-sys` dependency of `ncnn-rust` is a path dependency
+  carrying the workspace version: it never resolves from the registry inside this workspace, and the
+  release workflow publishes the two packages in order because the published metadata does.
+- **The ncnn SDK.** `ci/ncnn-versions.json` names the pinned release and the neighbours the monthly
+  matrix builds. Moving the pin follows `docs/migration.md` and never shares a pull request with a
+  crate dependency update. Features do not select the SDK: `NCNN_INSTALL_DIR` does, and every job
+  builds it through `tools/build-ncnn-sdk.py` so the patches in `tools/patches/` always apply.
+- **The toolchain floor.** `rust-version` moves separately from both. Raising it drops a runtime
+  rather than adapting to one, so it needs its own pull request with the supported-runtime statement
+  in `docs/support-matrix.md`.
+
+A dependency that changes inference numbers, copy paths or native behaviour needs the evidence of a
+code change: the conformance suite, the Vulkan contracts and the trained-model comparison for the
+affected path. A dependency that only affects tooling needs the job that uses it.
+
 ## Versions and releases
 
-`ncnn-rust` and `ncnn-rust-sys` are published together and always carry the same version. A
-release performs these steps:
+`ncnn-rust` and `ncnn-rust-sys` are published together and always carry the same version.
+
+Preparing a release stays manual:
 
 1. Confirm `repository`, `homepage` and `documentation` in both `crates/*/Cargo.toml` manifests name
    this repository; `cargo publish` warns and the crates.io page stays empty when they are missing.
-2. Set `version` in both manifests and in the workspace dependency entry, then run
-   `python tools/check-versions.py`, which compares every `ncnn-rust*` package version with
-   `cargo metadata`.
-3. Run `cargo publish -p ncnn-rust-sys --dry-run` and the matching `ncnn-rust` dry run, which CI
-   also performs on every pull request.
-4. `cargo publish -p ncnn-rust-sys`, wait for the index update, then `cargo publish -p ncnn-rust`.
-5. Move the `Unreleased` entries of `CHANGELOG.md` under the new version heading, add the release
-   date and a fresh empty `Unreleased` section, then tag the commit and create the GitHub release.
-   The GitHub release groups the Conventional Commit subjects recorded between two tags; the
-   changelog records what changed for a reader who upgrades.
+2. Set `version` in the workspace manifest and in the `ncnn-rust-sys` dependency entry, run
+   `python tools/check-versions.py`, and let the `Semver checks` job report whether the new version
+   allows the changes it carries.
+3. Move the `Unreleased` entries of `CHANGELOG.md` under the new version heading, add the release
+   date and a fresh empty `Unreleased` section. The release body comes from that section, so a
+   version without one fails the release workflow.
+4. Tag the commit and push the tag.
+
+Pushing a `v*` tag starts `.github/workflows/release.yml`:
+
+1. It refuses a tag whose name differs from the workspace version.
+2. It publishes `ncnn-rust-sys`, waits for its crates.io index entry, then publishes `ncnn-rust`. The
+   wait is what orders them, because the second package resolves the first from the registry. A
+   package that already holds that version is skipped, so re-running a tag is safe.
+3. It creates the GitHub release from the matching `CHANGELOG.md` section and updates the release
+   when one already exists.
+
+The workflow needs `CARGO_REGISTRY_TOKEN` in the `release` environment. `.github/release.yml` groups
+generated notes by label for manual `gh release create --generate-notes` runs; the workflow itself
+uses the changelog section.
 
 The ncnn SDK version is a separate axis. `ci/ncnn-versions.json` records the pinned release, and
 `crates/ncnn-sys/build.rs` rejects an unlisted SDK version unless `NCNN_ALLOW_UNTESTED_VERSION=1`

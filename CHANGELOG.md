@@ -7,6 +7,20 @@ library upgrade is a minor change of this crate.
 
 ## Unreleased
 
+### Added
+
+- CI compares the public API with the published release, resolves every documentation link and
+  anchor offline, and a `v*` tag publishes both packages in dependency order before creating the
+  GitHub release from the changelog section.
+- A probe test prints the finiteness of three attention configurations, which identifies the
+  aarch64 configuration that differs.
+
+### Changed
+
+- `Allocator::upload`, imports and command recording name the failing operation
+  (`Error::NativeAt`), so a refused allocation reads as `Vulkan upload` instead of a bare status.
+- `docs/contracts.md` records the measured device-memory exhaustion behaviour.
+
 ## 0.2.0 - 2026-11-10
 
 ### Added

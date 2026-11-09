@@ -97,10 +97,16 @@ GitHub-hosted runners cover these configurations without additional hardware:
 | macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
 | macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
 | Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1 |
+| Semver | `ubuntu-latest` | `cargo semver-checks check-release` for both packages against the published release |
+| Documentation links | `ubuntu-latest` | `lychee --offline --include-fragments` over the Markdown pages, which resolves local files and anchors without network access |
 | Vulkan | `ubuntu-latest` | The whole conformance suite plus the Vulkan contracts against Mesa lavapipe, with `NCNN_TEST_DEVICE=vulkan` |
 | Coverage | `ubuntu-latest` | `cargo llvm-cov` line coverage of the wrapper, uploaded as an artifact |
 | Parser fuzzing | `ubuntu-latest` nightly schedule | `cargo fuzz` on the text parameter loader and the bounded weight reader |
 | API documentation | `ubuntu-latest` | `cargo doc --workspace --no-deps` with a built SDK, deployed to <https://edwardssss.github.io/ncnn.rust/> |
+
+A `v*` tag starts `Release`, which publishes both packages in dependency order and creates the
+GitHub release from the changelog section for that version. The workflow needs a
+`CARGO_REGISTRY_TOKEN` secret; `CONTRIBUTING.md` records the manual steps that precede the tag.
 
 The first hosted run of this matrix passed every job on 2026-11-09 for commit `f3bf72b`: Linux
 x86-64, Linux ARM64, Windows, both macOS images, the minimum Rust version and software Vulkan.

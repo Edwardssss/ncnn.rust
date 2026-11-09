@@ -109,6 +109,24 @@ resident-recording results. It also reads the quantized bytes back through store
 after an explicit `Quantize` layer and from requantizing convolutions, whose `8=101` scale term makes
 the convolution itself write one-byte output.
 
+### Device memory exhaustion
+
+A device that refuses resident storage returns `Error::NativeAt("Vulkan upload", -1)`: ncnn
+translates `VK_ERROR_OUT_OF_DEVICE_MEMORY` into its own failure and writes `vkAllocateMemory failed`
+to stderr, so the code names the operation rather than the allocator result. The refusal leaves the
+allocator, the tensors it already returned and later requests usable: the measured run refused the
+23rd 256 MiB upload against a 5226 MiB heap budget, then downloaded the retained tensors, accepted a
+16-byte upload and completed a resident inference. `Allocator::tensor_bytes` reports live storage
+dropping to zero when the tensors are released while its second value keeps the high-water mark.
+Empty tensors are rejected before any native call.
+
+Device loss, driver reset and out-of-host-memory on a shared allocation are outside what the pinned
+API reports distinctly; they surface as the same native failure, and a device that no longer answers
+leaves the tensors unusable. Applications that run long resident sessions re-create the device and
+its allocator after a failure they cannot attribute.
+
+### Capability limits
+
 Native per-layer CPU fallback stays available, so device selection is not proof of GPU placement for
 every layer. True nonblocking submission and caller-owned `VkDevice` adoption are unavailable in the
 pinned native API. Labeled task metrics and macOS/ARM64 Vulkan execution remain unverified. The
