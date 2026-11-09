@@ -96,7 +96,7 @@ impl Extractor<'_> {
     fn extract_native(&self, target: &Target, stored: bool) -> Result<Mat> {
         self.ensure_not_reserved()?;
         let mut raw = std::ptr::null_mut();
-        let type_mask = i32::from(stored);
+        let extraction_type = i32::from(stored);
         let code = unsafe {
             match target {
                 Target::Named(name) => {
@@ -104,7 +104,7 @@ impl Extractor<'_> {
                         sys::ncnn_rs_extractor_extract_stored(
                             self.raw,
                             name.as_ptr(),
-                            type_mask,
+                            extraction_type,
                             &mut raw,
                         )
                     } else {
@@ -114,7 +114,10 @@ impl Extractor<'_> {
                 Target::Indexed(index) => {
                     if stored {
                         sys::ncnn_rs_extractor_extract_stored_index(
-                            self.raw, *index, type_mask, &mut raw,
+                            self.raw,
+                            *index,
+                            extraction_type,
+                            &mut raw,
                         )
                     } else {
                         sys::ncnn_extractor_extract_index(self.raw, *index, &mut raw)

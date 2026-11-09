@@ -216,11 +216,13 @@ fn cases() -> Vec<Case> {
                 &tagged(&[0.1; 4]),
             ]))
             .inputs(Inputs::One(&[4, 4])),
+        // LSTM reads `num_output * hidden_size * 4` recurrent weights, so the third block
+        // holds sixteen floats for two output units over eight gates.
         Case::new("LSTM", "0=2 1=32 3=2")
             .weights(support::blocks(&[
                 &tagged(&[0.1; 32]),
                 &tagged(&[0.0; 8]),
-                &tagged(&[0.1; 8]),
+                &tagged(&[0.1; 16]),
             ]))
             .inputs(Inputs::One(&[4, 4])),
         Case::new("GRU", "0=2 1=24")
@@ -438,6 +440,9 @@ fn uncovered_layers_load_and_forward() {
     }
 
     let binary = std::env::current_exe().expect("test binary");
+    // The child selects this test by its full module path; a bare name still exits zero
+    // with no test run, so the parent checks that the child actually executed one case.
+    const CHILD_TEST: &str = "layers::uncovered_layers_load_and_forward";
     let mut failures = Vec::new();
     let mut passed = 0;
     for (index, case) in cases().into_iter().enumerate() {
@@ -446,7 +451,7 @@ fn uncovered_layers_load_and_forward() {
         }
         let output = std::process::Command::new(&binary)
             .args([
-                "uncovered_layers_load_and_forward",
+                CHILD_TEST,
                 "--exact",
                 "--test-threads=1",
                 "--nocapture",
@@ -454,8 +459,17 @@ fn uncovered_layers_load_and_forward() {
             .env("NCNN_LAYER_CASE", case.operation)
             .output()
             .expect("child process");
-        if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() && stdout.contains("1 passed") {
             passed += 1;
+            continue;
+        }
+        if output.status.success() {
+            failures.push(format!(
+                "{}: child reported no executed case ({})",
+                case.operation,
+                stdout.trim().lines().last().unwrap_or("empty output")
+            ));
             continue;
         }
         let stderr = String::from_utf8_lossy(&output.stderr);

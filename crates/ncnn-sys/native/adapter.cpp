@@ -398,8 +398,8 @@ extern "C" int ncnn_rs_extractor_extract_stored(ncnn_extractor_t ex, const char*
             return -1;
         ncnn::Mat feat;
         int ret = ((ncnn::Extractor*)ex)->extract(name, feat, type);
-        if (ret != 0 || feat.empty())
-            return ret != 0 ? ret : -100;
+        if (ret != 0)
+            return ret;
         *out = (ncnn_mat_t) new ncnn::Mat(feat);
         return 0;
     }
@@ -413,8 +413,8 @@ extern "C" int ncnn_rs_extractor_extract_stored_index(ncnn_extractor_t ex, int i
             return -1;
         ncnn::Mat feat;
         int ret = ((ncnn::Extractor*)ex)->extract(index, feat, type);
-        if (ret != 0 || feat.empty())
-            return ret != 0 ? ret : -100;
+        if (ret != 0)
+            return ret;
         *out = (ncnn_mat_t) new ncnn::Mat(feat);
         return 0;
     }
