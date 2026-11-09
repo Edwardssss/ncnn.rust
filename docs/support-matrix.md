@@ -83,7 +83,10 @@ cargo test --workspace --target aarch64-unknown-linux-gnu
 A relocated toolchain also supplies its compiler sysroot and host tool-library paths. QEMU
 validates ABI, ownership, numeric behavior and instruction paths; its timing and `/proc` topology
 reflect the emulator, so native ARM performance remains real-device work. The `ubuntu-24.04-arm`
-CI job covers the native ARM64 build and test run.
+CI job covers the native ARM64 build and test run. It also accepts a `workflow_dispatch` input
+`arm_mha_probe`, which runs `invariants::attention_probe_reports_finiteness` and prints the values
+for three attention configurations, so a target-specific attention difference names its
+configuration instead of one failing case.
 
 ## Hosted CI coverage
 
