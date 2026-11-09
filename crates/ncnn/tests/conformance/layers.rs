@@ -23,6 +23,8 @@ enum Inputs {
 
 struct Case {
     operation: &'static str,
+    /// Child-process selector, unique per case, defaulting to the operation name.
+    id: &'static str,
     parameters: &'static str,
     weights: Vec<u8>,
     inputs: Inputs,
@@ -39,6 +41,7 @@ impl Case {
     fn new(operation: &'static str, parameters: &'static str) -> Self {
         Self {
             operation,
+            id: operation,
             parameters,
             weights: Vec::new(),
             inputs: Inputs::One(&[4, 4, 1]),
@@ -65,6 +68,12 @@ impl Case {
 
     fn graph(mut self, body: &'static str, layers: usize, blobs: usize) -> Self {
         self.graph = Some((body, layers, blobs));
+        self
+    }
+
+    /// Names a second case for the same operation.
+    fn id(mut self, id: &'static str) -> Self {
+        self.id = id;
         self
     }
 
@@ -184,9 +193,9 @@ fn cases() -> Vec<Case> {
         Case::new("PSROIPooling", "0=1 1=1 2=1 3=4")
             .inputs(Inputs::Two(&[8, 8, 4], &[4]))
             .operand(1, &[0., 0., 5., 5.]),
-        // Region alignment samples a region of four corner coordinates inside the feature
-        // map. The native sampler clamps only the upper corner index, so the case keeps the
-        // sample points strictly inside the four by four operand.
+        // Region alignment reads a region of four corner coordinates through one pointer,
+        // so the operand is one-dimensional; a channel-padded tensor would hand the layer
+        // alignment padding instead of the corners.
         Case::new("ROIAlign", "0=2 1=2")
             .inputs(Inputs::Two(&[4, 4, 2], &[4]))
             .operand(1, &[0.5, 0.5, 2.5, 2.5]),
@@ -277,7 +286,19 @@ fn cases() -> Vec<Case> {
                 4,
                 4,
             )
-            .verify(copy_to_writes_the_slice),
+            .verify(copy_to_writes_offsets_and_slice),
+        // The same layer across a depth and channel axis, where `starts` covers the two
+        // trailing axes and the copy keeps every plane in place otherwise.
+        Case::new("CopyTo", "-23309=2,1,1 -23311=2,2,3")
+            .id("CopyTo depth")
+            .inputs(Inputs::Two(&[4, 4, 2, 2], &[2, 2, 2, 2]))
+            .verify(copy_to_writes_every_plane),
+        // A negative start counts from the end of the axis, so a single element lands in the
+        // last corner of the target.
+        Case::new("CopyTo", "-23309=2,-1,-1 -23311=2,1,2")
+            .id("CopyTo negative")
+            .inputs(Inputs::Two(&[4, 4, 1], &[1, 1, 1]))
+            .verify(copy_to_writes_the_last_corner),
         // The inverse transform reads one channel per frequency bin, so the operand carries
         // a real and imaginary pair per frame and `n_fft / 2 + 1` bins.
         Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0").inputs(Inputs::One(&[2, 4, 5])),
@@ -373,26 +394,53 @@ fn run(case: &Case) -> Result<usize, String> {
     Ok(values.len())
 }
 
-/// The ramp starts at `0.5` and grows by `0.125`, so the written corner of the two by two
-/// source is distinguishable from the untouched neighbourhood of the four by four target.
-fn copy_to_writes_the_slice(values: &[f32]) -> Result<(), String> {
-    if values.len() != 16 {
-        return Err(format!("expected 16 values, got {}", values.len()));
+/// The ramp starts at `0.5` and grows by `0.125`, so a written corner is distinguishable from
+/// its untouched neighbourhood.
+fn copy_to_writes_offsets_and_slice(values: &[f32]) -> Result<(), String> {
+    check_values(
+        values,
+        16,
+        &[
+            (0, 0.5),
+            (4, 1.0),
+            (5, 0.5),
+            (6, 0.625),
+            (7, 1.375),
+            (9, 0.75),
+            (10, 0.875),
+            (15, 2.375),
+        ],
+    )
+}
+
+fn copy_to_writes_every_plane(values: &[f32]) -> Result<(), String> {
+    check_values(
+        values,
+        64,
+        &[
+            (0, 0.5),
+            (5, 0.5),
+            (10, 0.875),
+            (15, 2.375),
+            (54, 2.125),
+            (63, 8.375),
+        ],
+    )
+}
+
+fn copy_to_writes_the_last_corner(values: &[f32]) -> Result<(), String> {
+    check_values(values, 16, &[(0, 0.5), (5, 1.125), (15, 0.5)])
+}
+
+fn check_values(values: &[f32], length: usize, expected: &[(usize, f32)]) -> Result<(), String> {
+    if values.len() != length {
+        return Err(format!("expected {length} values, got {}", values.len()));
     }
-    for (index, expected) in [
-        (0usize, 0.5f32),
-        (4, 1.0),
-        (5, 0.5),
-        (6, 0.625),
-        (7, 1.375),
-        (9, 0.75),
-        (10, 0.875),
-        (15, 2.375),
-    ] {
-        if values[index] != expected {
+    for (index, want) in expected {
+        if values[*index] != *want {
             return Err(format!(
-                "index {index}: {} instead of {expected}",
-                values[index]
+                "index {index}: {} instead of {want}",
+                values[*index]
             ));
         }
     }
@@ -407,7 +455,7 @@ fn uncovered_layers_load_and_forward() {
     if let Ok(name) = std::env::var("NCNN_LAYER_CASE") {
         let case = cases()
             .into_iter()
-            .find(|case| case.operation == name)
+            .find(|case| case.id == name)
             .expect("known case");
         if let Err(reason) = run(&case) {
             panic!("{name}: {reason}");
@@ -456,7 +504,7 @@ fn uncovered_layers_load_and_forward() {
         }
         let output = std::process::Command::new(&binary)
             .args([CHILD_TEST, "--exact", "--test-threads=1", "--nocapture"])
-            .env("NCNN_LAYER_CASE", case.operation)
+            .env("NCNN_LAYER_CASE", case.id)
             .output()
             .expect("child process");
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -467,7 +515,7 @@ fn uncovered_layers_load_and_forward() {
         if output.status.success() {
             failures.push(format!(
                 "{}: child reported no executed case ({})",
-                case.operation,
+                case.id,
                 stdout.trim().lines().last().unwrap_or("empty output")
             ));
             continue;
@@ -480,7 +528,7 @@ fn uncovered_layers_load_and_forward() {
             .unwrap_or("child process aborted without a message");
         failures.push(format!(
             "{}: {} (status {:?})",
-            case.operation,
+            case.id,
             detail.trim(),
             output.status.code()
         ));

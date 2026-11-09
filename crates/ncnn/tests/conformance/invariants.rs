@@ -2,7 +2,79 @@
 //! layout and scale agreement without needing a second implementation as a reference.
 
 use crate::support::{self, assert_close_with, tagged};
-use ncnn_rust::{ElementKind, Endpoint, Mat};
+use ncnn_rust::{ElementKind, Endpoint, Mat, Net};
+
+#[test]
+fn key_value_cache_keeps_what_it_already_saw() {
+    // A three-input attention step reads `q`, `past_k` and `past_v` and returns the grown
+    // caches, so leaving the past empty runs the first step and feeding the caches back
+    // extends them by one step.
+    let weights = support::blocks(&[
+        &tagged(&[0.25; 16]),
+        &support::raw(&[0.0; 4]),
+        &tagged(&[0.25; 16]),
+        &support::raw(&[0.0; 4]),
+        &tagged(&[0.25; 16]),
+        &support::raw(&[0.0; 4]),
+        &tagged(&[0.25; 16]),
+        &support::raw(&[0.0; 4]),
+    ]);
+    let net = support::graph(
+        4,
+        7,
+        "Input q 0 1 q\nInput k 0 1 k\nInput v 0 1 v\n\
+         MultiHeadAttention attn 3 3 q k v out cache_k cache_v 0=4 1=2 2=16 7=1\n",
+        &weights,
+    );
+    let step = |rows: usize| {
+        Mat::from_f32(
+            &(0..rows * 4)
+                .map(|index| index as f32 * 0.125 + 0.5)
+                .collect::<Vec<_>>(),
+            &[4, rows],
+        )
+        .expect("step")
+    };
+
+    let (first, cache_k, cache_v) = run_cache_step(&net, step(2), None);
+    assert_eq!(first, 2, "first step sequence length");
+    let (second, grown_k, grown_v) = run_cache_step(&net, step(1), Some((cache_k, cache_v)));
+    assert_eq!(second, 3, "second step sequence length");
+    assert_eq!(grown_k.info().h, 3, "the cache grows by the submitted step");
+    assert_eq!(
+        grown_v.info().h,
+        3,
+        "the value cache grows with the key cache"
+    );
+}
+
+/// Runs one attention step and returns the cached sequence length plus both caches.
+fn run_cache_step(net: &Net, query: Mat, past: Option<(Mat, Mat)>) -> (i32, Mat, Mat) {
+    let mut extractor = net.extractor().expect("extractor");
+    extractor
+        .input(Endpoint::Name("q"), query)
+        .expect("query input");
+    if let Some((past_k, past_v)) = past {
+        extractor
+            .input(Endpoint::Name("k"), past_k)
+            .expect("past key input");
+        extractor
+            .input(Endpoint::Name("v"), past_v)
+            .expect("past value input");
+    }
+    let key = extractor
+        .extract_stored(Endpoint::Name("cache_k"))
+        .expect("key cache")
+        .detach()
+        .expect("key cache copy");
+    let value = extractor
+        .extract_stored(Endpoint::Name("cache_v"))
+        .expect("value cache")
+        .detach()
+        .expect("value cache copy");
+    let length = key.info().h;
+    (length, key, value)
+}
 
 #[test]
 fn unfold_and_fold_round_trip() {
