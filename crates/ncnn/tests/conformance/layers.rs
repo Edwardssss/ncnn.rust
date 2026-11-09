@@ -36,6 +36,8 @@ struct Case {
     tier: Tier,
     /// Explicit second operand, for layers whose second input carries coordinates.
     second_values: Option<&'static [f32]>,
+    /// Replacement graph with its layer and blob counts, for layers that need a producer.
+    graph: Option<(&'static str, usize, usize)>,
 }
 
 impl Case {
@@ -47,6 +49,7 @@ impl Case {
             inputs: Inputs::One(&[4, 4, 1]),
             tier: Tier::Forward,
             second_values: None,
+            graph: None,
         }
     }
 
@@ -67,6 +70,11 @@ impl Case {
 
     fn second_values(mut self, values: &'static [f32]) -> Self {
         self.second_values = Some(values);
+        self
+    }
+
+    fn graph(mut self, body: &'static str, layers: usize, blobs: usize) -> Self {
+        self.graph = Some((body, layers, blobs));
         self
     }
 }
@@ -223,9 +231,14 @@ fn cases() -> Vec<Case> {
             .weights(support::blocks(&[&tagged(&[0.25; 8])]))
             .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 8])),
         Case::new("Einsum", "-23300=2,105,105").inputs(Inputs::One(&[4, 4])),
-        Case::new("Fold", "1=2 11=2")
+        // Fold consumes the layout Unfold produces, so the case chains the pair.
+        Case::new("Fold", "")
             .inputs(Inputs::One(&[4, 4, 2]))
-            .parameters_only(),
+            .graph(
+                "Input input 0 1 input\nUnfold unfold 1 1 input mid 1=2 11=2 3=2 13=2 4=0\nFold fold 1 1 mid output 1=2 11=2 3=2 13=2 4=0 20=4 21=4\n",
+                3,
+                3,
+            ),
         Case::new("CopyTo", "")
             .inputs(Inputs::Two(&[4, 4, 1], &[4, 4, 1]))
             .parameters_only(),
@@ -245,45 +258,49 @@ fn tensor(shape: &[usize]) -> ncnn_rust::Mat {
 }
 
 fn run(case: &Case) -> Result<usize, String> {
-    let (body, layers, blobs, mut inputs): (String, usize, usize, Vec<(&str, ncnn_rust::Mat)>) =
-        match case.inputs {
-            Inputs::Memory => (
-                format!(
-                    "{} operation 0 1 output {}\n",
-                    case.operation, case.parameters
-                ),
-                1,
-                1,
-                Vec::new(),
+    let (body, mut layers, mut blobs, mut inputs): (
+        String,
+        usize,
+        usize,
+        Vec<(&str, ncnn_rust::Mat)>,
+    ) = match case.inputs {
+        Inputs::Memory => (
+            format!(
+                "{} operation 0 1 output {}\n",
+                case.operation, case.parameters
             ),
-            Inputs::One(shape) => (
-                format!(
-                    "Input input 0 1 input\n{} operation 1 1 input output {}\n",
-                    case.operation, case.parameters
-                ),
-                2,
-                2,
-                vec![("input", tensor(shape))],
+            1,
+            1,
+            Vec::new(),
+        ),
+        Inputs::One(shape) => (
+            format!(
+                "Input input 0 1 input\n{} operation 1 1 input output {}\n",
+                case.operation, case.parameters
             ),
-            Inputs::Two(a, b) => (
-                format!(
-                    "Input a 0 1 a\nInput b 0 1 b\n{} operation 2 1 a b output {}\n",
-                    case.operation, case.parameters
-                ),
-                3,
-                3,
-                vec![("a", tensor(a)), ("b", tensor(b))],
+            2,
+            2,
+            vec![("input", tensor(shape))],
+        ),
+        Inputs::Two(a, b) => (
+            format!(
+                "Input a 0 1 a\nInput b 0 1 b\n{} operation 2 1 a b output {}\n",
+                case.operation, case.parameters
             ),
-            Inputs::Three(a, b, c) => (
-                format!(
+            3,
+            3,
+            vec![("a", tensor(a)), ("b", tensor(b))],
+        ),
+        Inputs::Three(a, b, c) => (
+            format!(
                 "Input a 0 1 a\nInput b 0 1 b\nInput c 0 1 c\n{} operation 3 1 a b c output {}\n",
                 case.operation, case.parameters
             ),
-                4,
-                4,
-                vec![("a", tensor(a)), ("b", tensor(b)), ("c", tensor(c))],
-            ),
-        };
+            4,
+            4,
+            vec![("a", tensor(a)), ("b", tensor(b)), ("c", tensor(c))],
+        ),
+    };
     if let Some(values) = case.second_values {
         let shape = match case.inputs {
             Inputs::Two(_, second) | Inputs::Three(_, second, _) => second,
@@ -292,6 +309,14 @@ fn run(case: &Case) -> Result<usize, String> {
         inputs[1].1 = ncnn_rust::Mat::from_f32(values, shape)
             .map_err(|error| format!("second operand failed with {error:?}"))?;
     }
+    let body = match case.graph {
+        Some((graph, graph_layers, graph_blobs)) => {
+            layers = graph_layers;
+            blobs = graph_blobs;
+            graph.to_string()
+        }
+        None => body,
+    };
     if case.tier == Tier::Parameters {
         let text = format!("7767517\n{layers} {blobs}\n{body}");
         let mut net =
