@@ -61,6 +61,18 @@ fixtures and lock files, runs Clippy plus the workflow and Markdown linters, and
 adapter, build-script, workflow and documentation paths their own review instructions. Delete the
 file when the repository does not use CodeRabbit.
 
+## Merging
+
+The `main` ruleset requires one approving review, a resolved review thread per finding, and the
+`test (ubuntu-latest)` plus `MSRV 1.85.1` checks. Squash is the only merge method, and only
+repository administrators can bypass the ruleset. External contributions therefore need a
+maintainer approval before they land.
+
+Dependency updates merge without a maintainer: `.github/workflows/dependabot-auto-merge.yml`
+approves patch and minor Dependabot pull requests and arms auto-merge, which completes once the
+required checks pass. Major updates wait for a maintainer. The Dependabot app holds a
+`pull_request` bypass entry so it can complete its own merges, and it holds no push rights.
+
 ## Formatting
 
 | Language | Tool | Command |

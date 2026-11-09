@@ -1,4 +1,4 @@
-# Every change is reviewed by the maintainer. GitHub turns these entries into
-# review requests on each pull request and, with the branch ruleset, makes the
-# approval mandatory.
+# GitHub turns these entries into review requests on each pull request. The
+# branch ruleset requires one approving review without pinning it to the code
+# owner, which keeps automated approvals able to satisfy the requirement.
 * @Edwardssss

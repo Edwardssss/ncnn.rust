@@ -19,9 +19,16 @@ jobs:
 
       # Major updates stay open for review; patch and minor updates merge once the
       # required checks pass, which branch protection enforces.
-      - name: Enable auto-merge
+      #
+      # The ruleset requires one approving review, so the workflow approves the
+      # pull request itself before arming auto-merge. It stays armed until every
+      # required check and every review thread is resolved, and the `synchronize`
+      # trigger re-approves after a rebase dismisses the earlier approval.
+      - name: Approve and enable auto-merge
         if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
