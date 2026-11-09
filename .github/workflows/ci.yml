@@ -111,7 +111,7 @@ jobs:
           cargo publish -p ncnn-rust-sys --dry-run --allow-dirty
           # The safe crate requires the version under test, which the registry does not
           # carry until the release publishes it, so the archive stands in for it.
-          sys_dir="$(echo "$PWD"/target/package/ncnn-rust-sys-[0-9]*)"
+          sys_dir="$(find "$PWD/target/package" -maxdepth 1 -type d -name 'ncnn-rust-sys-[0-9]*' -print -quit)"
           cat > "$RUNNER_TEMP/patch.toml" <<EOF
           [patch.crates-io]
           ncnn-rust-sys = { path = "$sys_dir" }
@@ -153,17 +153,16 @@ jobs:
 
       - name: Package both crates
         run: |
+          mkdir -p "$RUNNER_TEMP/packages"
           cargo package -p ncnn-rust-sys --no-verify
-          sys_dir="$(echo "$PWD"/target/package/ncnn-rust-sys-[0-9]*)"
+          tar -xzf "$(ls target/package/ncnn-rust-sys-[0-9]*.crate | head -n1)" -C "$RUNNER_TEMP/packages"
+          sys_dir="$(find "$RUNNER_TEMP/packages" -maxdepth 1 -type d -name 'ncnn-rust-sys-[0-9]*' | head -n1)"
           cat > "$RUNNER_TEMP/patch.toml" <<EOF
           [patch.crates-io]
           ncnn-rust-sys = { path = "$sys_dir" }
           EOF
           cargo package -p ncnn-rust --no-verify --config "$RUNNER_TEMP/patch.toml"
-          mkdir -p "$RUNNER_TEMP/packages"
-          for archive in target/package/*.crate; do
-            tar -xzf "$archive" -C "$RUNNER_TEMP/packages"
-          done
+          tar -xzf "$(ls target/package/ncnn-rust-[0-9]*.crate | head -n1)" -C "$RUNNER_TEMP/packages"
           ls "$RUNNER_TEMP/packages"
 
       - name: Build a crate that consumes the archives
