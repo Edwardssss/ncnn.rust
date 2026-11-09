@@ -200,7 +200,9 @@ networks.
 families, the graph pairs and all 108 layer cases repeat on the GPU. One contract compares
 `Convolution`, `ConvolutionDepthWise` and `InnerProduct` with int8 weights, whose scale pushes `0.25`
 below one quantization step, against the float run on the host and against the device and
-resident-recording results, and reads the quantized bytes back through stored extraction.
+resident-recording results. It also reads the quantized bytes back through stored extraction, both
+after an explicit `Quantize` layer and from requantizing convolutions, whose `8=101` scale term makes
+the convolution itself write one-byte output.
 
 Native per-layer CPU fallback stays available, so device selection is not proof of GPU placement for
 every layer. True nonblocking submission and caller-owned `VkDevice` adoption are unavailable in the

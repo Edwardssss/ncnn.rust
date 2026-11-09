@@ -35,6 +35,18 @@ const QUANTIZED_LAYERS: [(&str, &str, &[usize]); 3] = [
     ),
 ];
 const WEIGHT_SCALE: f32 = 3.0;
+/// Requantized variants keep one byte per element on the way out, so the storage of a
+/// convolution itself is readable without a separate quantization layer.
+const REQUANTIZED_LAYERS: [(&str, &str); 2] = [
+    (
+        "Convolution",
+        "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4 8=101\n",
+    ),
+    (
+        "ConvolutionDepthWise",
+        "7767517\n2 2\nInput input 0 1 input\nConvolutionDepthWise conv 1 1 input output 0=1 1=2 3=1 5=0 6=4 7=1 8=101\n",
+    ),
+];
 /// The quantized convolution followed by one-byte storage, so the stored bytes are readable.
 const QUANTIZED_STORAGE: &str = "7767517\n3 3\nInput input 0 1 input\n\
      Convolution conv 1 1 input scaled 0=1 1=2 5=0 6=4 8=1\n\
@@ -72,6 +84,24 @@ fn raw(values: &[f32]) -> Vec<u8> {
 /// One float weight block, one output-channel scale and one input scale.
 fn quantized_weights() -> Vec<u8> {
     [tagged(&[0.25; 4]), raw(&[WEIGHT_SCALE]), raw(&[1.0])].concat()
+}
+
+/// The same weights with the extra output scale a requantizing layer loads.
+fn requantized_weights() -> Vec<u8> {
+    [quantized_weights(), raw(&[1.0])].concat()
+}
+
+/// Reads the one-byte storage a requantizing layer writes.
+fn stored_bytes(net: &Net, label: &str) -> Vec<i8> {
+    let mut extractor = net.extractor().expect("extractor");
+    extractor
+        .input(Endpoint::Name("input"), conv_input())
+        .expect("input");
+    let guard = extractor
+        .extract_stored(Endpoint::Name("output"))
+        .expect("stored output");
+    assert_eq!(guard.info().elemsize, 1, "{label} storage width");
+    guard.to_i8().expect("stored bytes")
 }
 
 fn single_layer(body: &str, weights: &[u8], device: Option<&Device>) -> Net {
@@ -265,6 +295,20 @@ fn vulkan_surface_contracts() {
         guard.to_i8().expect("host stored bytes")
     };
     assert_eq!(stored, host_stored, "device and host stored bytes");
+
+    // A requantizing layer writes one byte per element itself, so the convolution storage is
+    // readable without the extra quantization layer.
+    for (label, body) in REQUANTIZED_LAYERS {
+        let weights = requantized_weights();
+        let host = stored_bytes(&single_layer(body, &weights, None), label);
+        assert!(
+            host.iter().any(|value| *value != 0),
+            "{label}: requantized output is not all zeros"
+        );
+        let device_values = stored_bytes(&single_layer(body, &weights, Some(&device)), label);
+        assert_eq!(host, device_values, "{label}: device and host bytes");
+    }
+
     let quantized_net = convolution_net(Some(&device), true);
 
     let uploaded = allocator
