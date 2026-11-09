@@ -284,6 +284,9 @@ fn uncovered_layers_load_and_forward() {
     let mut forwarded = 0;
     let mut loaded = 0;
     for case in cases() {
+        // Visible with --nocapture, which identifies the case when a native layer
+        // crashes the process instead of returning an error.
+        eprintln!("running layer case {}", case.operation);
         match run(&case) {
             Ok(_) if case.tier == Tier::Forward => forwarded += 1,
             Ok(_) => loaded += 1,
