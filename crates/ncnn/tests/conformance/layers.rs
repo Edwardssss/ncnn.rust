@@ -386,7 +386,10 @@ fn run(case: &Case) -> Result<usize, String> {
         return Err("empty output".into());
     }
     if let Some(index) = values.iter().position(|value| !value.is_finite()) {
-        return Err(format!("non-finite value at index {index}"));
+        return Err(format!(
+            "non-finite value at index {index} in {:?}",
+            &values[..values.len().min(16)]
+        ));
     }
     if let Some(verify) = case.verify {
         verify(&values)?;
