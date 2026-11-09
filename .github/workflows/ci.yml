@@ -89,7 +89,7 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
           DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo test --workspace -- --nocapture
+        run: cargo test --workspace
 
       - name: Example
         env:
@@ -234,7 +234,7 @@ jobs:
       - name: Test on native ARM64
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo test --workspace -- --nocapture
+        run: cargo test --workspace
 
   # Hosted runners expose no GPU, so this job validates the Vulkan contracts on
   # Mesa lavapipe. System glslang comes from distro packages; the first hosted
