@@ -36,41 +36,88 @@ fn main() {
         prefix.is_dir(),
         "NCNN_INSTALL_DIR must name an existing installation directory"
     );
-    let link_kind = env::var("NCNN_LINK_KIND").unwrap_or_else(|_| "static".into());
+    let requested_kind = env::var("NCNN_LINK_KIND").ok();
     assert!(
-        matches!(link_kind.as_str(), "static" | "dylib"),
+        matches!(requested_kind.as_deref(), None | Some("static" | "dylib")),
         "NCNN_LINK_KIND must be static or dylib"
     );
     let include = prefix.join("include/ncnn");
-    let library_name = if target.contains("windows") {
-        "ncnn.lib"
-    } else if link_kind == "static" {
-        "libncnn.a"
-    } else if os == "macos" {
+    let lib_dirs = [prefix.join("lib"), prefix.join("lib64")];
+    // MSVC names a static library and a DLL import library `ncnn.lib`, so the file
+    // name cannot say which one the SDK ships and the DLL decides the layout.
+    let shared_name = if os == "macos" {
         "libncnn.dylib"
+    } else if target.contains("windows") {
+        "ncnn.lib"
     } else {
         "libncnn.so"
     };
-    let lib = [prefix.join("lib"), prefix.join("lib64")]
+    let static_name = if target.contains("windows") {
+        "ncnn.lib"
+    } else {
+        "libncnn.a"
+    };
+    let find = |name: &str| lib_dirs.iter().find(|dir| dir.join(name).is_file());
+    let dll = [prefix.join("bin/ncnn.dll"), prefix.join("lib/ncnn.dll")]
         .into_iter()
-        .find(|dir| dir.join(library_name).is_file())
-        .unwrap_or_else(|| {
-            panic!("NCNN_INSTALL_DIR must contain lib/{library_name} or lib64/{library_name}")
-        });
+        .find(|path| path.is_file());
+    let has_static_file = find(static_name).is_some();
+    let has_shared_file = if target.contains("windows") {
+        dll.is_some()
+    } else {
+        find(shared_name).is_some()
+    };
+    assert!(
+        has_static_file || has_shared_file,
+        "NCNN_INSTALL_DIR must contain lib/{static_name} or lib/{shared_name} in lib or lib64"
+    );
+    // A shared MSVC install ships ncnn.lib as well, so the DLL separates the two
+    // layouts; the other targets name the files apart.
+    let layout = if target.contains("windows") {
+        if has_shared_file {
+            "dylib"
+        } else {
+            "static"
+        }
+    } else if has_shared_file && !has_static_file {
+        "dylib"
+    } else {
+        "static"
+    };
+    let link_kind = match requested_kind.as_deref() {
+        Some(requested) => {
+            // A mismatch stays an error instead of a silent override: the kind also
+            // selects NCNN_STATIC_DEFINE and the NCNN_EXTRA_LIBS closure, so the
+            // requested and the linked kind must agree.
+            let both_shipped = !target.contains("windows") && has_static_file && has_shared_file;
+            assert!(
+                requested == layout || both_shipped,
+                "NCNN_LINK_KIND={requested} contradicts the SDK layout, which ships only {}; set NCNN_LINK_KIND={layout} or install a matching SDK",
+                if has_shared_file && !has_static_file {
+                    shared_name
+                } else {
+                    static_name
+                }
+            );
+            requested
+        }
+        None => layout,
+    };
+    let library_name = if link_kind == "static" || target.contains("windows") {
+        static_name
+    } else {
+        shared_name
+    };
+    let lib = find(library_name).unwrap_or_else(|| {
+        panic!("NCNN_INSTALL_DIR must contain lib/{library_name} or lib64/{library_name}")
+    });
     for path in [include.join("platform.h"), lib.join(library_name)] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    // MSVC names both a static library and an import library ncnn.lib, so a shared
-    // SDK links silently even when the static default was asked for. Report the
-    // mismatch here instead of at the first missing-DLL launch.
-    if target.contains("windows") && link_kind == "static" {
-        let shared = [prefix.join("bin/ncnn.dll"), prefix.join("lib/ncnn.dll")]
-            .into_iter()
-            .find(|path| path.is_file());
-        if let Some(dll) = shared {
+    if target.contains("windows") && link_kind == "dylib" {
+        if let Some(dll) = &dll {
             println!(
-                "cargo:warning={} ships a shared ncnn library, so this build links ncnn.dll; set NCNN_LINK_KIND=dylib and put {} on PATH",
-                prefix.display(),
+                "cargo:warning=ncnn links ncnn.dll; put {} on PATH before running",
                 dll.parent().expect("ncnn.dll has a parent").display()
             );
         }

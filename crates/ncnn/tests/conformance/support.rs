@@ -42,6 +42,12 @@ pub fn graph(layers: usize, blobs: usize, body: &str, weights: &[u8]) -> Net {
     graph_with(layers, blobs, body, weights, Ok)
 }
 
+/// Builds a network and reports load failures instead of panicking.
+pub fn try_graph(layers: usize, blobs: usize, body: &str, weights: &[u8]) -> Result<Net> {
+    let text = format!("7767517\n{layers} {blobs}\n{body}");
+    fp32_pipeline().load_bytes(&text, weights)
+}
+
 /// Builds a network after the caller adjusts the builder.
 pub fn graph_with(
     layers: usize,

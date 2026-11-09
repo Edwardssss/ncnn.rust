@@ -5,7 +5,9 @@
 //! backend.
 
 mod allocation;
+mod api;
 mod graphs;
+mod layers;
 mod operators;
 mod support;
 
