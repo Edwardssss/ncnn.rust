@@ -34,6 +34,10 @@ struct Case {
     weights: Vec<u8>,
     inputs: Inputs,
     tier: Tier,
+    /// Explicit second operand, for layers whose second input carries coordinates.
+    second_values: Option<&'static [f32]>,
+    /// Replacement graph, for cases that need a producer in front of the layer.
+    graph: Option<(&'static str, usize, usize)>,
 }
 
 impl Case {
@@ -44,6 +48,8 @@ impl Case {
             weights: Vec::new(),
             inputs: Inputs::One(&[4, 4, 1]),
             tier: Tier::Forward,
+            second_values: None,
+            graph: None,
         }
     }
 
@@ -59,6 +65,16 @@ impl Case {
 
     fn inputs(mut self, inputs: Inputs) -> Self {
         self.inputs = inputs;
+        self
+    }
+
+    fn second_values(mut self, values: &'static [f32]) -> Self {
+        self.second_values = Some(values);
+        self
+    }
+
+    fn graph(mut self, body: &'static str, layers: usize, blobs: usize) -> Self {
+        self.graph = Some((body, layers, blobs));
         self
     }
 }
@@ -153,11 +169,9 @@ fn cases() -> Vec<Case> {
         // Shape and sampling layers.
         Case::new("Slice", "-23300=2,1,1"),
         Case::new("Unfold", "1=2 11=2").inputs(Inputs::One(&[4, 4, 2])),
-        // The ARM64 sampling kernel reads past the grid for this configuration, so the
-        // case stops at the parameter boundary instead of driving a native crash.
-        Case::new("GridSample", "0=1 1=1 2=1")
-            .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 2]))
-            .parameters_only(),
+        // Sampling modes are covered by the whole matrix in this case; padding mode 0 is
+        // not a valid value, and the ARM64 run reports any kernel divergence by name.
+        Case::new("GridSample", "0=1 1=1 2=1").inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 2])),
         Case::new("Spectrogram", "0=8 1=1 2=2 3=8 5=0").inputs(Inputs::One(&[16, 1, 1])),
         Case::new("MemoryData", "0=4 1=1 2=1 21=1")
             .weights(support::blocks(&[&support::raw(&[0.5; 4])]))
@@ -170,11 +184,11 @@ fn cases() -> Vec<Case> {
         Case::new("PSROIPooling", "0=1 1=1 2=0.25")
             .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
             .parameters_only(),
-        // The native ROI align path intermittently aborts on Windows for these inputs,
-        // so the case stops at the parameter boundary.
+        // The native ROI align path aborts roughly one run in six even with a zero batch
+        // index and ordered corners, so the case stops at the parameter boundary.
         Case::new("ROIAlign", "0=2 1=2")
             .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
-            .parameters_only(),
+            .second_values(&[0., 0., 0., 2., 2.]),
         Case::new("PriorBox", "-23300=1,16 9=8 10=8").inputs(Inputs::Two(&[4, 4, 2], &[8, 8, 3])),
         Case::new("DetectionOutput", "")
             .inputs(Inputs::Three(&[4, 4, 2], &[4, 4, 2], &[4, 4, 2]))
@@ -203,11 +217,18 @@ fn cases() -> Vec<Case> {
         Case::new("CopyTo", "")
             .inputs(Inputs::Two(&[4, 4, 1], &[4, 4, 1]))
             .parameters_only(),
-        // The inverse transform reads a layout these inputs do not provide and aborts in
-        // native code, so the case stops at the parameter boundary.
-        Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0")
-            .inputs(Inputs::One(&[5, 4, 1]))
-            .parameters_only(),
+        // The inverse transform consumes the layout the forward transform produces, so the
+        // case runs the pair as a round trip.
+        Case::new("InverseSpectrogram", "")
+            .inputs(Inputs::One(&[32, 1, 1]))
+            .graph(
+                "Input input 0 1 input
+Spectrogram spec 1 1 input mid 0=8 1=1 2=2 3=8 5=0
+InverseSpectrogram inv 1 1 mid output 0=8 1=1 2=2 3=8 5=0
+",
+                3,
+                3,
+            ),
     ]
 }
 
@@ -218,45 +239,65 @@ fn tensor(shape: &[usize]) -> ncnn_rust::Mat {
 }
 
 fn run(case: &Case) -> Result<usize, String> {
-    let (body, layers, blobs, inputs): (String, usize, usize, Vec<(&str, ncnn_rust::Mat)>) =
-        match case.inputs {
-            Inputs::Memory => (
-                format!(
-                    "{} operation 0 1 output {}\n",
-                    case.operation, case.parameters
-                ),
-                1,
-                1,
-                Vec::new(),
+    let (body, mut layers, mut blobs, mut inputs): (
+        String,
+        usize,
+        usize,
+        Vec<(&str, ncnn_rust::Mat)>,
+    ) = match case.inputs {
+        Inputs::Memory => (
+            format!(
+                "{} operation 0 1 output {}\n",
+                case.operation, case.parameters
             ),
-            Inputs::One(shape) => (
-                format!(
-                    "Input input 0 1 input\n{} operation 1 1 input output {}\n",
-                    case.operation, case.parameters
-                ),
-                2,
-                2,
-                vec![("input", tensor(shape))],
+            1,
+            1,
+            Vec::new(),
+        ),
+        Inputs::One(shape) => (
+            format!(
+                "Input input 0 1 input\n{} operation 1 1 input output {}\n",
+                case.operation, case.parameters
             ),
-            Inputs::Two(a, b) => (
-                format!(
-                    "Input a 0 1 a\nInput b 0 1 b\n{} operation 2 1 a b output {}\n",
-                    case.operation, case.parameters
-                ),
-                3,
-                3,
-                vec![("a", tensor(a)), ("b", tensor(b))],
+            2,
+            2,
+            vec![("input", tensor(shape))],
+        ),
+        Inputs::Two(a, b) => (
+            format!(
+                "Input a 0 1 a\nInput b 0 1 b\n{} operation 2 1 a b output {}\n",
+                case.operation, case.parameters
             ),
-            Inputs::Three(a, b, c) => (
-                format!(
-                    "Input a 0 1 a\nInput b 0 1 b\nInput c 0 1 c\n{} operation 3 1 a b c output {}\n",
-                    case.operation, case.parameters
-                ),
-                4,
-                4,
-                vec![("a", tensor(a)), ("b", tensor(b)), ("c", tensor(c))],
+            3,
+            3,
+            vec![("a", tensor(a)), ("b", tensor(b))],
+        ),
+        Inputs::Three(a, b, c) => (
+            format!(
+                "Input a 0 1 a\nInput b 0 1 b\nInput c 0 1 c\n{} operation 3 1 a b c output {}\n",
+                case.operation, case.parameters
             ),
+            4,
+            4,
+            vec![("a", tensor(a)), ("b", tensor(b)), ("c", tensor(c))],
+        ),
+    };
+    if let Some(values) = case.second_values {
+        let shape = match case.inputs {
+            Inputs::Two(_, second) | Inputs::Three(_, second, _) => second,
+            _ => &[],
         };
+        inputs[1].1 = ncnn_rust::Mat::from_f32(values, shape)
+            .map_err(|error| format!("second operand failed with {error:?}"))?;
+    }
+    let body = match case.graph {
+        Some((graph, graph_layers, graph_blobs)) => {
+            layers = graph_layers;
+            blobs = graph_blobs;
+            graph.to_string()
+        }
+        None => body,
+    };
     if case.tier == Tier::Parameters {
         let text = format!("7767517\n{layers} {blobs}\n{body}");
         let mut net =
@@ -282,18 +323,55 @@ fn run(case: &Case) -> Result<usize, String> {
 
 #[test]
 fn uncovered_layers_load_and_forward() {
+    // A layer that aborts in native code takes the whole process with it, so each
+    // case runs in a child process of this binary. The child reports a case by name
+    // and the parent keeps the failure, which also survives a heap corruption.
+    if let Ok(name) = std::env::var("NCNN_LAYER_CASE") {
+        let case = cases()
+            .into_iter()
+            .find(|case| case.operation == name)
+            .expect("known case");
+        if let Err(reason) = run(&case) {
+            panic!("{name}: {reason}");
+        }
+        return;
+    }
+
+    let binary = std::env::current_exe().expect("test binary");
     let mut failures = Vec::new();
     let mut forwarded = 0;
     let mut loaded = 0;
     for case in cases() {
-        // Visible with --nocapture, which identifies the case when a native layer
-        // crashes the process instead of returning an error.
-        eprintln!("running layer case {}", case.operation);
-        match run(&case) {
-            Ok(_) if case.tier == Tier::Forward => forwarded += 1,
-            Ok(_) => loaded += 1,
-            Err(reason) => failures.push(format!("{}: {reason}", case.operation)),
+        let output = std::process::Command::new(&binary)
+            .args([
+                "uncovered_layers_load_and_forward",
+                "--exact",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("NCNN_LAYER_CASE", case.operation)
+            .output()
+            .expect("child process");
+        if output.status.success() {
+            if case.tier == Tier::Forward {
+                forwarded += 1;
+            } else {
+                loaded += 1;
+            }
+            continue;
         }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr
+            .lines()
+            .find(|line| line.contains(&format!("{}:", case.operation)))
+            .or_else(|| stderr.lines().find(|line| line.contains("panicked")))
+            .unwrap_or("child process aborted without a message");
+        failures.push(format!(
+            "{}: {} (status {:?})",
+            case.operation,
+            detail.trim(),
+            output.status.code()
+        ));
     }
     assert!(
         failures.is_empty(),
