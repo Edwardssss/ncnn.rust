@@ -184,6 +184,11 @@ recording-command ownership, completed tensor guards, pipeline-cache persistence
 same-device buffer imports are implemented. Cache tests reject truncation, header corruption and
 payload hash corruption. CPU extractor guards remain CPU-only.
 
+`NCNN_TEST_DEVICE=vulkan` attaches the default device to every conformance fixture, so the operator
+families, the graph pairs and all 108 layer cases repeat on the GPU. One contract compares a
+quantized convolution, whose int8 weight scale pushes `0.25` below one quantization step, against the
+float run on the host and against the device and resident-recording results.
+
 Native per-layer CPU fallback stays available, so device selection is not proof of GPU placement for
 every layer. True nonblocking submission and caller-owned `VkDevice` adoption are unavailable in the
 pinned native API. Labeled task metrics and macOS/ARM64 Vulkan execution remain unverified. The

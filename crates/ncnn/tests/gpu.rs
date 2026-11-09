@@ -10,6 +10,14 @@ use ncnn_rust::gpu::Device;
 use ncnn_rust::{Mat, Net};
 
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
+const FLOAT_CONVOLUTION: &str =
+    "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4\n";
+const QUANTIZED_CONVOLUTION: &str =
+    "7767517\n2 2\nInput input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4 8=1\n";
+const CONVOLUTION_INPUT: [f32; 16] = [
+    -3.0, -2.75, -2.5, -2.25, -2.0, -1.75, -1.5, -1.25, -1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5,
+    0.75,
+];
 
 fn sum_net(device: &Device) -> Net {
     Net::builder()
@@ -19,6 +27,43 @@ fn sum_net(device: &Device) -> Net {
         .vulkan(device.clone())
         .load_bytes(PARAM, &[])
         .expect("load")
+}
+
+fn tagged(values: &[f32]) -> Vec<u8> {
+    let mut bytes = vec![0f32.to_le_bytes()].concat();
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn raw(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// A one-channel two by two convolution, with int8 weight storage when `quantized`.
+fn convolution_net(device: Option<&Device>, quantized: bool) -> Net {
+    let (body, weights) = if quantized {
+        (
+            QUANTIZED_CONVOLUTION,
+            [tagged(&[0.25; 4]), raw(&[3.0]), raw(&[1.0])].concat(),
+        )
+    } else {
+        (FLOAT_CONVOLUTION, tagged(&[0.25; 4]))
+    };
+    let builder = Net::builder()
+        .expect("builder")
+        .threads(1)
+        .expect("threads");
+    match device {
+        Some(device) => builder.vulkan(device.clone()),
+        None => builder,
+    }
+    .load_bytes(body, &weights)
+    .expect("load")
 }
 
 fn values(mat: &Mat) -> Vec<f32> {
@@ -120,6 +165,65 @@ fn vulkan_surface_contracts() {
         "peak across the recording"
     );
     drop(outputs);
+
+    // A quantized convolution reads a float weight block followed by one scale per output
+    // channel and one input scale. The weight scale leaves `0.25` below one int8 step, so a
+    // quantized run has to differ from the float run and still agree between host and device.
+    let input = || Mat::from_f32(&CONVOLUTION_INPUT, &[4, 4, 1]).expect("convolution input");
+    let float_run = convolution_net(None, false)
+        .infer([("input", input())], &["output"])
+        .expect("float convolution")
+        .remove(0)
+        .values;
+    let host_run = convolution_net(None, true)
+        .infer([("input", input())], &["output"])
+        .expect("quantized convolution")
+        .remove(0)
+        .values;
+    let quantized_net = convolution_net(Some(&device), true);
+    let device_run = quantized_net
+        .infer([("input", input())], &["output"])
+        .expect("device quantized convolution")
+        .remove(0)
+        .values;
+    assert!(
+        (host_run[0] - float_run[0]).abs() > 0.5,
+        "quantized weights must change the result: {} vs {}",
+        host_run[0],
+        float_run[0]
+    );
+    for (index, (device_value, host_value)) in device_run.iter().zip(&host_run).enumerate() {
+        assert!(
+            (device_value - host_value).abs() <= 1e-2,
+            "quantized convolution index {index}: {device_value} != {host_value}"
+        );
+    }
+
+    let uploaded = allocator
+        .upload(&input())
+        .expect("upload convolution input");
+    let mut quantized_command = allocator
+        .command(&quantized_net)
+        .expect("quantized command");
+    quantized_command
+        .input("input", &uploaded)
+        .expect("quantized input");
+    let quantized_index = quantized_command
+        .extract("output")
+        .expect("quantized extract");
+    let quantized_outputs = quantized_command.wait().expect("quantized wait");
+    let resident_run = values(
+        &quantized_outputs[quantized_index]
+            .download()
+            .expect("quantized output"),
+    );
+    for (index, (resident_value, host_value)) in resident_run.iter().zip(&host_run).enumerate() {
+        assert!(
+            (resident_value - host_value).abs() <= 1e-2,
+            "resident quantized convolution index {index}: {resident_value} != {host_value}"
+        );
+    }
+    drop(quantized_outputs);
 
     let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     let path = directory.join("gpu-pipeline-cache.bin");

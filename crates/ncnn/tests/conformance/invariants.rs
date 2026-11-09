@@ -83,8 +83,9 @@ fn narrow_elements_convert_to_fp32() {
 fn quantized_pipeline_keeps_its_one_byte_storage() {
     // A quantized convolution loads a float weight block followed by one scale per
     // output channel and one input scale, and `Quantize` stores its result one byte
-    // wide. The scales make the stored bytes readable with `to_i8`.
-    let quantized = support::graph(
+    // wide. The scales make the stored bytes readable with `to_i8`, which needs the CPU
+    // copy path, so the fixtures stay on the host even when the suite targets a device.
+    let quantized = support::cpu_graph(
         3,
         3,
         "Input input 0 1 input\n\
@@ -97,7 +98,7 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
             &support::raw(&[1.0]),
         ]),
     );
-    let float = support::graph(
+    let float = support::cpu_graph(
         2,
         2,
         "Input input 0 1 input\nConvolution conv 1 1 input output 0=1 1=2 5=0 6=4\n",

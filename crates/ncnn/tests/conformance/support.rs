@@ -69,12 +69,28 @@ pub fn graph_with(
 /// Silicon, which would round every result to FP16 before the reference comparison.
 /// The conformance suite states one numeric contract, so the tests disable those
 /// presets explicitly and `packing_and_fp16_options_preserve_values` covers the
-/// non-default pipelines separately.
+/// non-default pipelines separately. The same pins keep Vulkan shaders in FP32.
 fn fp32_pipeline() -> NetBuilder {
-    let mut builder = Net::builder()
+    let builder = Net::builder()
         .expect("builder")
         .threads(1)
         .expect("threads");
+    attach_device(pin_fp32(builder))
+}
+
+/// Builds a network on the CPU pipeline whatever device the suite targets.
+///
+/// Stored-layout contracts need the CPU copy path, so their fixtures stay on the host.
+pub fn cpu_graph(layers: usize, blobs: usize, body: &str, weights: &[u8]) -> Net {
+    let text = format!("7767517\n{layers} {blobs}\n{body}");
+    let builder = Net::builder()
+        .expect("builder")
+        .threads(1)
+        .expect("threads");
+    pin_fp32(builder).load_bytes(&text, weights).expect("load")
+}
+
+fn pin_fp32(mut builder: NetBuilder) -> NetBuilder {
     for flag in [
         OptionFlag::Fp16Packed,
         OptionFlag::Fp16Storage,
@@ -86,6 +102,49 @@ fn fp32_pipeline() -> NetBuilder {
         builder = builder.flag(flag, false).expect("flag");
     }
     builder
+}
+
+#[cfg(feature = "vulkan")]
+fn attach_device(builder: NetBuilder) -> NetBuilder {
+    match device::requested() {
+        Some(device) => builder.vulkan(device),
+        None => builder,
+    }
+}
+
+#[cfg(not(feature = "vulkan"))]
+fn attach_device(builder: NetBuilder) -> NetBuilder {
+    builder
+}
+
+#[cfg(feature = "vulkan")]
+mod device {
+    use ncnn_rust::gpu::Device;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static DEVICE: RefCell<Option<Device>> = RefCell::new(None);
+    }
+
+    /// Returns the device named by `NCNN_TEST_DEVICE=vulkan`, if any.
+    ///
+    /// The suite runs the same cases on the GPU when the variable is set, which is how
+    /// the Vulkan job repeats every operator and graph on the software device.
+    pub fn requested() -> Option<Device> {
+        let requested = std::env::var("NCNN_TEST_DEVICE")
+            .map(|value| value.eq_ignore_ascii_case("vulkan"))
+            .unwrap_or(false);
+        if !requested {
+            return None;
+        }
+        DEVICE.with(|slot| {
+            Some(
+                slot.borrow_mut()
+                    .get_or_insert_with(|| Device::default_device().expect("default Vulkan device"))
+                    .clone(),
+            )
+        })
+    }
 }
 
 /// Builds one operator between `input` and `output`.

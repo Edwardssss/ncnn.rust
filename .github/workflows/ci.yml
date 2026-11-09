@@ -250,9 +250,11 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo test --workspace
 
-  # Hosted runners expose no GPU, so this job validates the Vulkan contracts on
-  # Mesa lavapipe. System glslang comes from distro packages; the first hosted
-  # run confirms that those packages export the CMake targets ncnn expects.
+  # Hosted runners expose no GPU, so this job repeats the whole suite on Mesa lavapipe.
+  # NCNN_TEST_DEVICE attaches the software device to every conformance fixture, so the
+  # operators, graphs and layer cases run on the GPU as well as on the host. System
+  # glslang comes from distro packages; the first hosted run confirms that those
+  # packages export the CMake targets ncnn expects.
   vulkan:
     name: Vulkan (Mesa lavapipe)
     runs-on: ubuntu-latest
@@ -293,4 +295,5 @@ jobs:
       - name: Test with the software Vulkan device
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+          NCNN_TEST_DEVICE: vulkan
         run: cargo test --workspace --features vulkan

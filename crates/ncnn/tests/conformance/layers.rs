@@ -10,6 +10,9 @@
 
 use crate::support::{self, tagged};
 
+/// Compares one inference result against a numeric expectation.
+type Check = fn(&[f32]) -> Result<(), String>;
+
 #[derive(Clone, Copy)]
 enum Inputs {
     Memory,
@@ -28,6 +31,8 @@ struct Case {
     values: Vec<(usize, &'static [f32])>,
     /// Replacement graph with its layer and blob counts, for layers that need a producer.
     graph: Option<(&'static str, usize, usize)>,
+    /// Numeric expectation, for layers whose output proves a parameter mapping.
+    verify: Option<Check>,
 }
 
 impl Case {
@@ -39,6 +44,7 @@ impl Case {
             inputs: Inputs::One(&[4, 4, 1]),
             values: Vec::new(),
             graph: None,
+            verify: None,
         }
     }
 
@@ -59,6 +65,11 @@ impl Case {
 
     fn graph(mut self, body: &'static str, layers: usize, blobs: usize) -> Self {
         self.graph = Some((body, layers, blobs));
+        self
+    }
+
+    fn verify(mut self, verify: fn(&[f32]) -> Result<(), String>) -> Self {
+        self.verify = Some(verify);
         self
     }
 }
@@ -248,8 +259,18 @@ fn cases() -> Vec<Case> {
                 3,
             ),
         // Copy overwrites the leading corner of the first operand with the smaller one.
+        // The chain writes the same source twice, once through explicit offsets and once
+        // through `starts` and `axes`, and the check reads the written corner.
         Case::new("CopyTo", "")
-            .inputs(Inputs::Two(&[4, 4, 1], &[2, 2, 1])),
+            .inputs(Inputs::Two(&[4, 4, 1], &[2, 2, 1]))
+            .graph(
+                "Input a 0 1 a\nInput b 0 1 b\n\
+                 CopyTo offset 2 1 a b middle 0=1 1=1\n\
+                 CopyTo sliced 2 1 middle b output -23309=2,1,1 -23311=2,1,2\n",
+                4,
+                4,
+            )
+            .verify(copy_to_writes_the_slice),
         // The inverse transform reads one channel per frequency bin, so the operand carries
         // a real and imaginary pair per frame and `n_fft / 2 + 1` bins.
         Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0").inputs(Inputs::One(&[2, 4, 5])),
@@ -339,7 +360,36 @@ fn run(case: &Case) -> Result<usize, String> {
     if let Some(index) = values.iter().position(|value| !value.is_finite()) {
         return Err(format!("non-finite value at index {index}"));
     }
+    if let Some(verify) = case.verify {
+        verify(&values)?;
+    }
     Ok(values.len())
+}
+
+/// The ramp starts at `0.5` and grows by `0.125`, so the written corner of the two by two
+/// source is distinguishable from the untouched neighbourhood of the four by four target.
+fn copy_to_writes_the_slice(values: &[f32]) -> Result<(), String> {
+    if values.len() != 16 {
+        return Err(format!("expected 16 values, got {}", values.len()));
+    }
+    for (index, expected) in [
+        (0usize, 0.5f32),
+        (4, 1.0),
+        (5, 0.5),
+        (6, 0.625),
+        (7, 1.375),
+        (9, 0.75),
+        (10, 0.875),
+        (15, 2.375),
+    ] {
+        if values[index] != expected {
+            return Err(format!(
+                "index {index}: {} instead of {expected}",
+                values[index]
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[test]
