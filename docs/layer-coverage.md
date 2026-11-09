@@ -66,4 +66,8 @@ in-repo commands that exercise the same paths.
 ## Known native differences
 
 - `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays, and the defect is reported upstream as Tencent/ncnn#7259.
-- `MultiHeadAttention` on Linux aarch64 takes ncnn's ARM path, which builds its own Gemm and Softmax layers; this synthetic case returns one non-finite output row there while the x86-64, Windows and macOS runs stay finite. The layer case therefore asserts finiteness everywhere except that target.
+
+Every case asserts finite output on every target. The attention layer previously carried an
+aarch64 exemption; `invariants::attention_probe_reports_finiteness` now runs three configurations,
+and the `ubuntu-24.04-arm` runner returns the same finite values as x86-64 for all of them, so the
+exemption is gone.
