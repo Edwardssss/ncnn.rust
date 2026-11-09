@@ -101,8 +101,9 @@ wrapper regressions without a second backend.
   `Eltwise`, and the narrow-element conversion against known bit patterns.
 - `layers.rs` holds one case per layer type the SDK registers. Cases run in child processes of the
   test binary, so a layer that aborts in native code becomes a named failure instead of a lost run.
-  Forty-five cases reach a forward pass; the rest assert that the type registers and its parameters
-  parse.
+  Every case runs one inference and asserts a finite output, which requires the shapes and operand
+  values each forward pass reads: a spectrum carries one channel per frequency bin, and the
+  detection heads decode regions from scores and priors.
 
 Native ncnn enables FP16 packed, storage and arithmetic by default on ARM64 and Apple Silicon, so
 results there round to FP16 before any comparison. The conformance suite pins a single-threaded
