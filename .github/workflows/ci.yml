@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      arm_mha_probe:
+        description: Run the attention probe on the ARM runner and print the values
+        type: boolean
+        default: false
 
 env:
   NCNN_VERSION: "20261020"
@@ -262,6 +268,17 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo test --workspace
 
+      # The layer case skips its finiteness assertion on this target because the ARM path
+      # builds its own Gemm and Softmax. This dispatch runs the probe that prints every
+      # configuration instead, so the failing values and the shapes that fail appear in the
+      # log next to the same run on x86-64.
+      - name: Probe the attention variants
+        if: inputs.arm_mha_probe
+        continue-on-error: true
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo test -p ncnn-rust --test conformance attention_probe -- --nocapture --test-threads=1
+
   # Hosted runners expose no GPU, so this job repeats the whole suite on Mesa lavapipe.
   # NCNN_TEST_DEVICE attaches the software device to every conformance fixture, so the
   # operators, graphs and layer cases run on the GPU as well as on the host. System
@@ -310,8 +327,78 @@ jobs:
           NCNN_TEST_DEVICE: vulkan
         run: cargo test --workspace --features vulkan
 
+      # The other jobs build a CPU-only SDK, so the feature-gated test code is linted here.
+      - name: Clippy with the Vulkan feature
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo clippy --workspace --all-targets --features vulkan -- -D warnings
+
   # Line coverage of the Rust wrapper, reported as an artifact. The FFI adapters and the
   # native library stay outside the report, so the number describes the safe layer.
+  # Offline link checking: local file targets and anchors only. Remote URLs stay out so a
+  # third-party outage cannot fail a pull request.
+  links:
+    name: Documentation links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check local links and anchors
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --offline --include-fragments --no-progress
+            README.md README_zh.md CHANGELOG.md SECURITY.md CONTRIBUTING.md
+            'docs/*.md' 'crates/*/README.md'
+          fail: true
+
+  # Compares the public API against the latest published release, so a breaking change
+  # needs the version bump that allows it.
+  semver:
+    name: Semver checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-cpu
+      NCNN_LINK_KIND: dylib
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
+
+      - name: Cache ncnn SDK
+        id: sdk-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-cpu-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Build ncnn
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+
+      - name: Compare against the published API
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: |
+          for package in ncnn-rust-sys ncnn-rust; do
+            echo "::group::$package"
+            cargo semver-checks check-release --package "$package"
+            echo "::endgroup::"
+          done
+
   coverage:
     name: Coverage (llvm-cov)
     runs-on: ubuntu-latest
