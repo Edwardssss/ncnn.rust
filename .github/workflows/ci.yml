@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -352,38 +353,39 @@ jobs:
           fail: true
 
   # Compares the public API against the latest published release, so a breaking change
-  # needs the version bump that allows it.
+  # needs the version bump that allows it. cargo-semver-checks builds with every feature,
+  # so the SDK has to enable Vulkan as well.
   semver:
     name: Semver checks
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-cpu
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-vulkan
       NCNN_LINK_KIND: dylib
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install toolchain
+      - name: Install toolchain and software Vulkan
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev
+          sudo apt-get install -y cmake clang libclang-dev glslang-dev glslang-tools libvulkan-dev
           llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
           [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
           echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
-      - name: Cache ncnn SDK
+      - name: Cache ncnn Vulkan SDK
         id: sdk-cache
         uses: actions/cache@v6
         with:
           path: ${{ env.NCNN_INSTALL_DIR }}
-          key: ncnn-cpu-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+          key: ncnn-vulkan-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
 
-      - name: Build ncnn
+      - name: Build ncnn with Vulkan
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
           python3 tools/fetch-ncnn.py
-          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}" --vulkan
 
       - uses: taiki-e/install-action@v2
         with:
