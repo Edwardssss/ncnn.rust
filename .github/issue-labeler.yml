@@ -1,0 +1,75 @@
+# Regular expressions for github/issue-labeler. A label applies when any of its
+# patterns matches the issue title or body. The action runs on the Node regular
+# expression engine, which has no inline case-insensitive flag, so each pattern
+# spells out the case alternatives it accepts.
+
+bug:
+  - "[Bb]ug"
+  - "[Cc]rash(es|ed)?"
+  - "[Ss]egfault"
+  - "[Pp]anic"
+  - "[Rr]egression"
+  - "wrong (result|output)"
+  - "incorrect (result|value|output)"
+  - "undefined behavio"
+
+enhancement:
+  - "[Ff]eature request"
+  - "[Ee]nhancement"
+  - "support for"
+  - "[Pp]roposal"
+
+documentation:
+  - "[Dd]ocumentation"
+  - "[Rr]eadme"
+  - "doc comment"
+
+question:
+  - "[Hh]ow (do|can|should) I"
+  - "[Uu]sage question"
+
+performance:
+  - "[Pp]erformance"
+  - "[Tt]hroughput"
+  - "[Ll]atency"
+  - "[Bb]enchmark"
+  - "[Ss]lower than"
+
+build:
+  - "NCNN_INSTALL_DIR"
+  - "NCNN_LINK_KIND"
+  - "NCNN_EXTRA_LIB"
+  - "[Bb]indgen"
+  - "[Ll]ibclang"
+  - "[Ll]ink(er|ing)? (error|failure)"
+  - "[Bb]uild (script|error|failure)"
+
+vulkan:
+  - "[Vv]ulkan"
+  - "[Ll]avapipe"
+  - "[Gg]PU (device|backend|selection)"
+
+platform:linux:
+  - "[Ll]inux"
+  - "[Uu]buntu"
+
+platform:windows:
+  - "[Ww]indows"
+  - "[Mm][Ss][Vv][Cc]"
+
+platform:macos:
+  - "[Mm]ac[Oo][Ss]"
+  - "[Dd]arwin"
+  - "Apple [Ss]ilicon"
+
+platform:arm:
+  - "\\b[Aa][Rr][Mm]\\b"
+  - "\\baarch64\\b"
+  - "\\barm64\\b"
+
+needs-repro:
+  - "[Rr]eproduc"
+  - "minimal example"
+
+needs-info:
+  - "no (model|param|bin|log|backtrace)"
