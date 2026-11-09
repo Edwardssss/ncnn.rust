@@ -1,0 +1,21 @@
+[package]
+name = "ncnn-rust-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ncnn-rust = { path = "../crates/ncnn" }
+
+[[bin]]
+name = "param_parse"
+path = "fuzz_targets/param_parse.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

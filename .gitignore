@@ -1,5 +1,8 @@
 # Cargo build output
 /target/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
 
 # Pinned ncnn source, fetched and verified by tools/fetch-ncnn.py
 /vendor/

@@ -108,7 +108,9 @@ packages and a build of a separate crate that depends on the packaged archives.
 Separate jobs check the declared minimum Rust version and run the Vulkan contracts against the
 Mesa lavapipe software device. The contracts cover device selection, allocator accounting,
 resident inference, guard descriptors, external buffer import, pipeline caches and cross-device
-rejection. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pinned release plus
+rejection, and the same device repeats the whole conformance suite. A coverage job reports line
+coverage of the wrapper, and a nightly workflow fuzzes the text parameter loader and the bounded
+weight reader. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pinned release plus
 the newest and previous tags, audits the enabled C API against generated bindings and library
 symbols, and compares trained-model output with a native C++ reference. `cargo test` covers the
 in-repo conformance suite: operator families compared against Rust reference loops, one inference

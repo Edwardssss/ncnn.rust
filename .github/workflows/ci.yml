@@ -104,6 +104,18 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo test --workspace
 
+      # The generated INT8/operator fixtures compare Rust against a standalone C++
+      # reference built from the same SDK, without downloading trained models.
+      - name: Model regression (generated fixtures)
+        if: runner.os == 'Linux'
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: |
+          cmake -S crates/ncnn/tests/native -B target/cpu-reference -DCMAKE_BUILD_TYPE=Release
+          cmake --build target/cpu-reference --config Release --parallel 2
+          cargo run -p ncnn-rust --example model_regression -- \
+            target/cpu-sdk-fixtures target/cpu-reference/ncnn_cpu_reference --compact
+
       - name: Version consistency
         if: runner.os == 'Linux'
         run: python3 tools/check-versions.py
@@ -297,3 +309,50 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
           NCNN_TEST_DEVICE: vulkan
         run: cargo test --workspace --features vulkan
+
+  # Line coverage of the Rust wrapper, reported as an artifact. The FFI adapters and the
+  # native library stay outside the report, so the number describes the safe layer.
+  coverage:
+    name: Coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-cpu
+      NCNN_LINK_KIND: dylib
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
+          cargo install cargo-llvm-cov --locked
+
+      - name: Cache ncnn SDK
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-cpu-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Build ncnn
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - name: Report coverage
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo llvm-cov --workspace --lcov --output-path coverage.lcov --summary-only
+
+      - name: Upload the report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage.lcov
+          if-no-files-found: error

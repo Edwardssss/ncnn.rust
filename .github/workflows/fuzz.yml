@@ -1,0 +1,60 @@
+name: Fuzz
+
+# Parser fuzzing needs a nightly toolchain and a built SDK, so it runs nightly and on
+# demand instead of on every push.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NCNN_VERSION: "20261020"
+  NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-cpu
+  NCNN_LINK_KIND: dylib
+
+jobs:
+  fuzz:
+    name: Fuzz the model loaders
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
+          cargo install cargo-fuzz --locked
+
+      - name: Cache ncnn SDK
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-cpu-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Build ncnn
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+
+      - name: Run the parser target
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo fuzz run param_parse --fuzz-dir fuzz -- -max_total_time=120 -rss_limit_mb=4096
+
+      - name: Keep the corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          path: |
+            fuzz/artifacts
+            fuzz/corpus
+          if-no-files-found: ignore

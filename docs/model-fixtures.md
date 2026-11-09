@@ -17,11 +17,11 @@ For the generated INT8/operator fixtures alone, omit the model download and use:
 cargo run -p ncnn-rust --example model_regression -- target/cpu-sdk-fixtures ./target/cpu-reference/ncnn_cpu_reference --compact
 ```
 
-The runner creates this fixture directory and generates 25 compact cases locally.
 The default invocation also runs the 17 pinned trained-model cases, for 42 cases
 total. On the guard-enabled cases, the second Rust extraction checks the same
 native outputs through guards; it is a second wrapper path, not an additional
-independent native comparison.
+independent native comparison. Every push runs the generated-fixture pass on Linux: the
+workflow builds the reference from the same SDK and compares the 25 compact cases.
 
 MSVC places the reference at `target/cpu-reference/Release/ncnn_cpu_reference.exe`; pass that path as the final argument. The reference links directly to the installed ncnn C++ library and reads model files independently of the Rust adapters.
 
