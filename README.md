@@ -1,3 +1,5 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # ncnn.rust
 
 Rust bindings for [ncnn](https://github.com/Tencent/ncnn) with resource-safe ownership.
