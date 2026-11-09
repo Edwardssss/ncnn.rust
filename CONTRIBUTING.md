@@ -73,6 +73,10 @@ approves patch and minor Dependabot pull requests and arms auto-merge, which com
 required checks pass. Major updates wait for a maintainer. The Dependabot app holds a
 `pull_request` bypass entry so it can complete its own merges, and it holds no push rights.
 
+The `v*` tag ruleset blocks deleting or moving a release tag. Repository settings offer squash as
+the only merge method, so the merge buttons match the ruleset, and the Dependabot alerts plus
+secret scanning run on every push.
+
 ## Formatting
 
 | Language | Tool | Command |
