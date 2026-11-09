@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Inference and resource-safe interfaces for an externally installed ncnn SDK"
+description = "Rust bindings for ncnn inference with resource-safe ownership, reusable output buffers and an optional Vulkan backend"
 readme = "README.md"
 keywords = ["ncnn", "inference", "neural-network"]
 categories = ["api-bindings", "science"]
@@ -17,4 +17,4 @@ default = []
 vulkan = ["ncnn-sys/vulkan"]
 
 [dependencies]
-ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.1.0" }
+ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.1.1" }

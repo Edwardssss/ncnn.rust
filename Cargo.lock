@@ -119,14 +119,14 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "ncnn-rust"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ncnn-rust-sys",
 ]
 
 [[package]]
 name = "ncnn-rust-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bindgen",
  "cc",
@@ -223,3 +223,7 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[patch.unused]]
+name = "ncnn-rust-sys"
+version = "0.1.1"

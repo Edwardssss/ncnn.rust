@@ -159,25 +159,23 @@ fn cases() -> Vec<Case> {
             .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 2]))
             .parameters_only(),
         Case::new("Spectrogram", "0=8 1=1 2=2 3=8 5=0").inputs(Inputs::One(&[16, 1, 1])),
-        Case::new("MemoryData", "0=4 2=1 21=0")
-            .inputs(Inputs::Memory)
-            .parameters_only(),
+        Case::new("MemoryData", "0=4 1=1 2=1 21=1")
+            .weights(support::blocks(&[&support::raw(&[0.5; 4])]))
+            .inputs(Inputs::Memory),
         // Layers whose forward pass needs anchors, nested weights or two blobs.
         Case::new("Proposal", "")
             .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 4]))
             .parameters_only(),
-        Case::new("ROIPooling", "")
-            .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 5]))
+        Case::new("ROIPooling", "0=2 1=2").inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5])),
+        Case::new("PSROIPooling", "0=1 1=1 2=0.25")
+            .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
             .parameters_only(),
-        Case::new("PSROIPooling", "")
-            .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 5]))
-            .parameters_only(),
+        // The native ROI align path intermittently aborts on Windows for these inputs,
+        // so the case stops at the parameter boundary.
         Case::new("ROIAlign", "0=2 1=2")
-            .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 5]))
+            .inputs(Inputs::Two(&[4, 4, 2], &[1, 1, 5]))
             .parameters_only(),
-        Case::new("PriorBox", "-23300=1,16 9=8 10=8")
-            .inputs(Inputs::Two(&[4, 4, 2], &[8, 8, 3]))
-            .parameters_only(),
+        Case::new("PriorBox", "-23300=1,16 9=8 10=8").inputs(Inputs::Two(&[4, 4, 2], &[8, 8, 3])),
         Case::new("DetectionOutput", "")
             .inputs(Inputs::Three(&[4, 4, 2], &[4, 4, 2], &[4, 4, 2]))
             .parameters_only(),
@@ -193,23 +191,23 @@ fn cases() -> Vec<Case> {
         Case::new("MultiHeadAttention", "0=2 1=2 2=4")
             .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1]))
             .parameters_only(),
-        Case::new("SDPA", "")
-            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1]))
-            .parameters_only(),
-        Case::new("RotaryEmbed", "")
-            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1]))
-            .parameters_only(),
+        Case::new("SDPA", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
+        Case::new("RotaryEmbed", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("DeformableConv2D", "0=1 1=2 11=2 5=0 6=8")
-            .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 8]))
-            .parameters_only(),
-        Case::new("Einsum", "-23300=2,105,105").parameters_only(),
+            .weights(support::blocks(&[&tagged(&[0.25; 8])]))
+            .inputs(Inputs::Two(&[4, 4, 2], &[4, 4, 8])),
+        Case::new("Einsum", "-23300=2,105,105").inputs(Inputs::One(&[4, 4])),
         Case::new("Fold", "1=2 11=2")
             .inputs(Inputs::One(&[4, 4, 2]))
             .parameters_only(),
         Case::new("CopyTo", "")
             .inputs(Inputs::Two(&[4, 4, 1], &[4, 4, 1]))
             .parameters_only(),
-        Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0").parameters_only(),
+        // The inverse transform reads a layout these inputs do not provide and aborts in
+        // native code, so the case stops at the parameter boundary.
+        Case::new("InverseSpectrogram", "0=8 1=1 2=2 3=8 5=0")
+            .inputs(Inputs::One(&[5, 4, 1]))
+            .parameters_only(),
     ]
 }
 
