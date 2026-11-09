@@ -6,6 +6,7 @@ use std::{marker::PhantomData, rc::Rc};
 /// ncnn records the element width but not whether a 16-bit element is IEEE half
 /// or bfloat16, so the caller supplies the format for those tensors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ElementKind {
     /// IEEE 754 single precision.
     F32,
@@ -35,6 +36,28 @@ impl ElementKind {
             Self::I32 => 6,
         }
     }
+
+    /// Returns the byte width of one element in this format.
+    pub fn element_bytes(self) -> usize {
+        match self {
+            Self::F32 | Self::I32 => 4,
+            Self::F16 | Self::Bf16 | Self::I16 => 2,
+            Self::I8 | Self::U8 => 1,
+        }
+    }
+
+    /// Returns the format name used in error messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F16 => "f16",
+            Self::Bf16 => "bf16",
+            Self::I8 => "int8",
+            Self::U8 => "uint8",
+            Self::I16 => "int16",
+            Self::I32 => "int32",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +85,7 @@ pub struct TensorInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 /// Source and destination pixel layout for image conversion.
+#[non_exhaustive]
 pub enum PixelFormat {
     /// Three interleaved channels in red, green, blue order.
     Rgb = 1,
@@ -94,6 +118,12 @@ pub(crate) enum Provenance {
 }
 
 /// An owned tensor handle released through the native allocator.
+///
+/// # Thread affinity
+///
+/// A tensor belongs to the thread that created it: the handle is not `Send` or `Sync` because
+/// native allocation, packing and the allocator a tensor came from are thread-affine. Move the
+/// input bytes instead and build a tensor on the thread that runs inference.
 pub struct Mat {
     pub(crate) raw: sys::ncnn_mat_t,
     pub(crate) f32_known: bool,
@@ -102,30 +132,40 @@ pub struct Mat {
 }
 pub(crate) fn shape(shape: &[usize]) -> Result<([i32; 4], usize)> {
     if !(1..=4).contains(&shape.len()) {
-        return Err(Error::Invalid("Shape must have 1..=4 dimensions"));
+        return Err(Error::invalid("Shape must have 1..=4 dimensions"));
     }
     let mut count = 1usize;
     let mut native = [0; 4];
     for (dimension, &v) in shape.iter().enumerate() {
         if v == 0 || v > i32::MAX as usize {
-            return Err(Error::Invalid("Invalid dimension"));
+            return Err(Error::invalid("Invalid dimension"));
         }
         count = count
             .checked_mul(v)
-            .ok_or(Error::Invalid("Shape overflow"))?;
+            .ok_or(Error::invalid("Shape overflow"))?;
         native[dimension] = v as i32;
     }
     if count > (isize::MAX as usize / 4).saturating_sub(64) {
-        return Err(Error::Invalid("Tensor exceeds addressable length"));
+        return Err(Error::invalid("Tensor exceeds addressable length"));
     }
     Ok((native, count))
 }
 impl Mat {
     /// Copies FP32 values into a new tensor of the given rank and extents.
+    ///
+    /// ```
+    /// let tensor = ncnn_rust::Mat::from_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2])?;
+    /// assert_eq!(tensor.info().w, 2);
+    /// assert_eq!(tensor.to_f32()?, [1.0, 2.0, 3.0, 4.0]);
+    /// # Ok::<(), ncnn_rust::Error>(())
+    /// ```
     pub fn from_f32(data: &[f32], dimensions: &[usize]) -> Result<Self> {
         let (s, count) = shape(dimensions)?;
         if data.len() != count {
-            return Err(Error::Invalid("Data length does not match shape"));
+            return Err(Error::invalid(format!(
+                "Data length {} does not match a shape of {count} elements",
+                data.len()
+            )));
         }
         let mut raw = std::ptr::null_mut();
         unsafe {
@@ -137,6 +177,42 @@ impl Mat {
             ))?;
             Self::owned(raw, true)
         }
+    }
+    /// Copies typed bytes into a new tensor of the given rank and extents.
+    ///
+    /// `data` holds elements of `kind.element_bytes()` bytes in channel-plane order, the
+    /// layout the native layers read and the typed readers expect. This is how a quantized
+    /// or half-precision tensor enters a network.
+    pub fn from_typed(kind: ElementKind, data: &[u8], dimensions: &[usize]) -> Result<Self> {
+        let (s, count) = shape(dimensions)?;
+        let width = kind.element_bytes();
+        let expected = count
+            .checked_mul(width)
+            .ok_or_else(|| Error::invalid("Tensor byte length overflows"))?;
+        if data.len() != expected {
+            return Err(Error::invalid(format!(
+                "Data length {} does not match {count} {} elements of {width} bytes",
+                data.len(),
+                kind.label()
+            )));
+        }
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            status(sys::ncnn_rs_mat_copy_typed(
+                kind.code(),
+                data.as_ptr(),
+                data.len(),
+                dimensions.len() as i32,
+                s.as_ptr(),
+                &mut raw,
+            ))?;
+            Self::owned(raw, kind == ElementKind::F32)
+        }
+    }
+    /// Copies signed 8-bit values into a new quantized tensor.
+    pub fn from_i8(data: &[i8], dimensions: &[usize]) -> Result<Self> {
+        let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), data.len()) };
+        Self::from_typed(ElementKind::I8, bytes, dimensions)
     }
     pub(crate) unsafe fn owned(raw: sys::ncnn_mat_t, f32_known: bool) -> Result<Self> {
         if raw.is_null() {
@@ -175,7 +251,12 @@ impl Mat {
     /// Copies 32-bit unpacked storage as FP32 values. The caller selects the
     /// interpretation for tensors whose scalar format is supplied by the model.
     pub fn to_f32(&self) -> Result<Vec<f32>> {
-        unsafe { self.read_f32_unchecked() }
+        let count = self.f32_copy_count()?;
+        let mut values: Vec<f32> = Vec::with_capacity(count);
+        status(unsafe { sys::ncnn_rs_mat_read_f32(self.raw, values.as_mut_ptr(), count) })?;
+        // The native copy initializes every element before the length is set.
+        unsafe { values.set_len(count) };
+        Ok(values)
     }
     /// Copies any scalar format into FP32 values.
     ///
@@ -184,6 +265,15 @@ impl Mat {
     /// Quantized outputs of `Quantize` and `Requantize` are signed 8-bit.
     pub fn to_f32_typed(&self, kind: ElementKind) -> Result<Vec<f32>> {
         let info = self.info();
+        let width = kind.element_bytes();
+        let stored = width.saturating_mul(info.elempack.max(1) as usize);
+        if info.elemsize != stored {
+            return Err(Error::invalid(format!(
+                "Tensor stores {} bytes per element, so it is not {} storage; read it with the matching kind, or extract it with FP32 conversion",
+                info.elemsize,
+                kind.label()
+            )));
+        }
         let count = self.logical_count(&info)?;
         let mut values = vec![0f32; count];
         if count == 0 {
@@ -204,25 +294,25 @@ impl Mat {
     }
     fn logical_count(&self, info: &TensorInfo) -> Result<usize> {
         if info.n <= 0 || info.w <= 0 || info.h <= 0 || info.d <= 0 || info.c <= 0 {
-            return Err(Error::Invalid("Tensor has an empty extent"));
+            return Err(Error::invalid("Tensor has an empty extent"));
         }
         let pixels = (info.w as usize)
             .checked_mul(info.h as usize)
             .and_then(|value| value.checked_mul(info.d as usize))
-            .ok_or(Error::Invalid("Tensor extent overflows"))?;
+            .ok_or(Error::invalid("Tensor extent overflows"))?;
         let pack = info.elempack.max(1) as usize;
         pixels
             .checked_mul(pack)
             .and_then(|value| value.checked_mul(info.c as usize))
             .and_then(|value| value.checked_mul(info.n as usize))
-            .ok_or(Error::Invalid("Tensor extent overflows"))
+            .ok_or(Error::invalid("Tensor extent overflows"))
     }
     /// Copies logical FP32 elements into an exact-sized initialized slice.
     /// Channel padding is omitted. A size/layout error leaves the slice unchanged.
     pub fn copy_to_f32(&self, out: &mut [f32]) -> Result<()> {
         let count = self.f32_copy_count()?;
         if out.len() != count {
-            return Err(Error::Invalid("Output buffer size mismatch"));
+            return Err(Error::invalid("Output buffer size mismatch"));
         }
         unsafe {
             status(sys::ncnn_rs_mat_read_f32(
@@ -251,7 +341,7 @@ impl Mat {
         let start = out.len();
         let end = start
             .checked_add(count)
-            .ok_or(Error::Invalid("Output length overflow"))?;
+            .ok_or(Error::invalid("Output length overflow"))?;
         out.reserve(count);
         let result = unsafe {
             status(sys::ncnn_rs_mat_read_f32(
@@ -277,7 +367,7 @@ impl Mat {
     pub fn as_f32_slice(&self) -> Result<&[f32]> {
         let (info, plane) = self.f32_layout()?;
         if info.c > 1 && info.cstep != plane {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Tensor channels contain padding; use channel_f32 or to_f32",
             ));
         }
@@ -298,17 +388,17 @@ impl Mat {
     pub fn channel_f32(&self, channel: usize) -> Result<&[f32]> {
         let (info, plane) = self.f32_layout()?;
         if channel >= info.c as usize {
-            return Err(Error::Invalid("Channel index out of bounds"));
+            return Err(Error::invalid("Channel index out of bounds"));
         }
         let offset = channel
             .checked_mul(info.cstep)
-            .ok_or(Error::Invalid("Channel offset overflow"))?;
+            .ok_or(Error::invalid("Channel offset overflow"))?;
         if offset
             .checked_add(plane)
             .filter(|count| *count <= isize::MAX as usize / 4)
             .is_none()
         {
-            return Err(Error::Invalid("Channel exceeds addressable storage"));
+            return Err(Error::invalid("Channel exceeds addressable storage"));
         }
         unsafe {
             Ok(std::slice::from_raw_parts(
@@ -326,28 +416,29 @@ impl Mat {
             || info.c <= 0
             || info.cstep < plane
         {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "FP32 views require valid unpacked single-batch storage",
             ));
         }
         let pointer = unsafe { sys::ncnn_mat_get_data(self.raw) };
         if pointer.is_null() || !pointer.cast::<f32>().is_aligned() {
-            return Err(Error::Invalid("FP32 storage is not aligned"));
+            return Err(Error::invalid("FP32 storage is not aligned"));
         }
         Ok((info, plane))
     }
     fn f32_copy_count(&self) -> Result<usize> {
         let m = self.info();
         if m.elemsize != 4 || m.elempack != 1 || m.n <= 0 {
-            return Err(Error::Invalid(
-                "FP32 copies require unpacked 32-bit storage",
-            ));
+            return Err(Error::invalid(format!(
+                "FP32 copies need unpacked 32-bit storage but the tensor stores {} bytes per element with pack {}; extract it with stored storage and read it with to_f32_typed or to_i8",
+                m.elemsize, m.elempack
+            )));
         }
         let (_, count) = shape(&[m.w as usize, m.h as usize, m.d as usize, m.c as usize])?;
         count
             .checked_mul(m.n as usize)
             .filter(|n| *n <= (isize::MAX as usize / 4).saturating_sub(64))
-            .ok_or(Error::Invalid("Tensor exceeds addressable length"))
+            .ok_or(Error::invalid("Tensor exceeds addressable length"))
     }
     /// Copies logical elements, excluding channel and batch padding.
     ///
@@ -387,7 +478,7 @@ impl Mat {
         let m = self.info();
         let (_, old_count) = shape(&[m.w as usize, m.h as usize, m.d as usize, m.c as usize])?;
         if count != old_count || m.n != 1 || m.elempack != 1 {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Reshape requires matching unpacked dimensions",
             ));
         }
@@ -407,12 +498,12 @@ impl Mat {
     pub fn normalized(&self, mean: &[f32], norm: &[f32]) -> Result<Self> {
         let m = self.info();
         if !self.f32_known || m.elemsize != 4 || m.elempack != 1 || m.n != 1 {
-            return Err(Error::Invalid("Normalization requires unpacked FP32"));
+            return Err(Error::invalid("Normalization requires unpacked FP32"));
         }
         if (!mean.is_empty() && mean.len() != m.c as usize)
             || (!norm.is_empty() && norm.len() != m.c as usize)
         {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Normalization requires one value per channel",
             ));
         }
@@ -447,9 +538,9 @@ impl Mat {
         let stride = width
             .checked_mul(format.channels())
             .and_then(|v| i32::try_from(v).ok())
-            .ok_or(Error::Invalid("Pixel stride overflow"))?;
+            .ok_or(Error::invalid("Pixel stride overflow"))?;
         if count != data.len() {
-            return Err(Error::Invalid("Pixel buffer size mismatch"));
+            return Err(Error::invalid("Pixel buffer size mismatch"));
         }
         unsafe {
             Self::owned(

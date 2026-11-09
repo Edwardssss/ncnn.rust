@@ -130,7 +130,7 @@ fn processors(current_thread: bool) -> Result<Vec<ProcessorId>> {
             })
             .collect());
     }
-    Err(Error::Invalid("CPU topology changed during enumeration"))
+    Err(Error::invalid("CPU topology changed during enumeration"))
 }
 
 /// Enumerates online processors across Windows groups or Linux kernel CPU IDs.
@@ -197,16 +197,16 @@ impl CpuSet {
     /// Enables or disables one CPU index.
     pub fn set(&mut self, cpu: usize, enabled: bool) -> Result<()> {
         let cpu =
-            i32::try_from(cpu).map_err(|_| Error::Invalid("CPU index exceeds native range"))?;
+            i32::try_from(cpu).map_err(|_| Error::invalid("CPU index exceeds native range"))?;
         unsafe { status(sys::ncnn_rs_cpuset_update(self.raw, cpu, enabled as i32)) }
     }
     /// Reports whether one CPU index is enabled.
     pub fn contains(&self, cpu: usize) -> Result<bool> {
         let cpu =
-            i32::try_from(cpu).map_err(|_| Error::Invalid("CPU index exceeds native range"))?;
+            i32::try_from(cpu).map_err(|_| Error::invalid("CPU index exceeds native range"))?;
         let result = unsafe { sys::ncnn_rs_cpuset_contains(self.raw, cpu) };
         if result < 0 {
-            return Err(Error::Invalid("CPU index exceeds native mask capacity"));
+            return Err(Error::invalid("CPU index exceeds native mask capacity"));
         }
         Ok(result != 0)
     }

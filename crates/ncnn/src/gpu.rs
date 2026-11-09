@@ -7,6 +7,7 @@ use std::{ffi::CStr, marker::PhantomData, rc::Rc, sync::OnceLock};
 
 /// Storage and arithmetic policy requested from the Vulkan backend.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum Precision {
     /// Requests FP32 storage and arithmetic.
     Fp32,
@@ -15,6 +16,12 @@ pub enum Precision {
 }
 
 /// An initialized native device. Clones share the process-owned device.
+///
+/// # Thread affinity
+///
+/// The native device table is thread-affine: enumerate once per thread and keep the device, its
+/// allocator and every network that uses them on that thread. Devices coordinate process-owned
+/// runtime state, so a device is not `Send` or `Sync`.
 #[derive(Clone, Debug)]
 pub struct Device {
     index: i32,
@@ -59,7 +66,7 @@ impl Device {
     pub fn new(index: usize) -> Result<Self> {
         initialize()?;
         let index =
-            i32::try_from(index).map_err(|_| Error::Invalid("Invalid Vulkan device index"))?;
+            i32::try_from(index).map_err(|_| Error::invalid("Invalid Vulkan device index"))?;
         if unsafe { sys::ncnn_rs_gpu_valid(index) } == 0 {
             return Err(Error::Unsupported(
                 "Vulkan device is unavailable or invalid",
@@ -186,7 +193,7 @@ impl Allocator {
     pub fn upload(&self, mat: &Mat) -> Result<Tensor> {
         let info = mat.info();
         if info.elemsize != 4 || info.elempack != 1 || info.dims == 0 {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Upload requires nonempty unpacked FP32 storage",
             ));
         }
@@ -200,7 +207,7 @@ impl Allocator {
         let bytes = unsafe { sys::ncnn_rs_gpu_tensor_bytes(raw) };
         let Some(live) = self.0.live_bytes.get().checked_add(bytes) else {
             unsafe { sys::ncnn_rs_gpu_tensor_destroy(raw) };
-            return Err(Error::Invalid("Tensor byte counter overflow"));
+            return Err(Error::invalid("Tensor byte counter overflow"));
         };
         self.0.live_bytes.set(live);
         self.0.peak_bytes.set(self.0.peak_bytes.get().max(live));
@@ -213,7 +220,7 @@ impl Allocator {
     /// Records resident inference. Submission occurs only in `Command::wait`.
     pub fn command<'a>(&self, net: &'a Net) -> Result<Command<'a>> {
         if net.vulkan_device().map(Device::index) != Some(self.0.device.index) {
-            return Err(Error::Invalid("Network and allocator devices differ"));
+            return Err(Error::invalid("Network and allocator devices differ"));
         }
         let raw = unsafe { sys::ncnn_rs_gpu_command_create(self.0.raw, net.as_raw()) };
         if raw.is_null() {
@@ -252,7 +259,7 @@ impl Allocator {
             || elements > i32::MAX as usize
             || elements.checked_mul(4).is_none_or(|n| n > capacity)
         {
-            return Err(Error::Invalid("Invalid external buffer range"));
+            return Err(Error::invalid("Invalid external buffer range"));
         }
         self.tensor(unsafe {
             sys::ncnn_rs_gpu_import(
@@ -310,13 +317,13 @@ impl<'a> Command<'a> {
     /// Records one resident input for this command.
     pub fn input(&mut self, name: &str, tensor: &'a Tensor) -> Result<()> {
         if self.failed {
-            return Err(Error::Invalid("Recording failed and must be cancelled"));
+            return Err(Error::invalid("Recording failed and must be cancelled"));
         }
         if tensor.allocator.0.device.index != self.allocator.0.device.index {
-            return Err(Error::Invalid("Tensor device differs"));
+            return Err(Error::invalid("Tensor device differs"));
         }
         if self.recorded {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Inputs cannot change after recording outputs",
             ));
         }
@@ -330,7 +337,7 @@ impl<'a> Command<'a> {
     /// Records an output and returns its index in the completed output vector.
     pub fn extract(&mut self, name: &str) -> Result<usize> {
         if self.failed {
-            return Err(Error::Invalid("Recording failed and must be cancelled"));
+            return Err(Error::invalid("Recording failed and must be cancelled"));
         }
         let name = CString::new(name)?;
         self.recorded = true;
@@ -348,7 +355,7 @@ impl<'a> Command<'a> {
     /// A native recording failure cancels the command instead of submitting it.
     pub fn wait(mut self) -> Result<Vec<Tensor>> {
         if self.failed {
-            return Err(Error::Invalid("Recording failed and must be cancelled"));
+            return Err(Error::invalid("Recording failed and must be cancelled"));
         }
         status(unsafe { sys::ncnn_rs_gpu_command_wait(self.raw) })?;
         Ok(std::mem::take(&mut self.outputs))

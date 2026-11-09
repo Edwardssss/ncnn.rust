@@ -14,7 +14,7 @@ impl Layer {
         let name = CString::new(name)?;
         let raw = unsafe { sys::ncnn_layer_create_by_type(name.as_ptr()) };
         if raw.is_null() {
-            return Err(Error::Invalid("Unknown layer type"));
+            return Err(Error::invalid("Unknown layer type"));
         }
         Ok(Self {
             raw,
@@ -29,11 +29,11 @@ impl Layer {
     /// Parameters must satisfy the selected layer's shape, type, and range contract.
     pub unsafe fn load_param(&mut self, parameters: &ParamDict) -> Result<()> {
         if self.pipeline {
-            return Err(Error::Invalid("Load parameters before pipeline creation"));
+            return Err(Error::invalid("Load parameters before pipeline creation"));
         }
         status((*self.raw)
             .load_param
-            .ok_or(Error::Invalid("Missing load_param callback"))?(
+            .ok_or(Error::invalid("Missing load_param callback"))?(
             self.raw,
             parameters.as_raw(),
         ))
@@ -45,7 +45,7 @@ impl Layer {
     /// and allocator dependencies must remain valid until the layer is destroyed.
     pub unsafe fn load_model(&mut self, model: sys::ncnn_modelbin_t) -> Result<()> {
         if self.pipeline {
-            return Err(Error::Invalid("Load weights before pipeline creation"));
+            return Err(Error::invalid("Load weights before pipeline creation"));
         }
         status(sys::ncnn_rs_layer_load_model(self.raw, model))
     }
@@ -55,13 +55,13 @@ impl Layer {
     /// Required parameters and weights must be loaded according to the layer contract.
     pub unsafe fn create_pipeline(&mut self) -> Result<()> {
         if self.pipeline {
-            return Err(Error::Invalid("Pipeline already created"));
+            return Err(Error::invalid("Pipeline already created"));
         }
         // Mark before calling so partial pipeline construction is also cleaned up.
         self.pipeline = true;
         status((*self.raw)
             .create_pipeline
-            .ok_or(Error::Invalid("Missing create_pipeline callback"))?(
+            .ok_or(Error::invalid("Missing create_pipeline callback"))?(
             self.raw,
             self.options.raw,
         ))
@@ -73,13 +73,13 @@ impl Layer {
     /// format, and packing. The native callback must initialize the output elements.
     pub unsafe fn forward(&mut self, input: &Mat) -> Result<Mat> {
         if !self.pipeline {
-            return Err(Error::Invalid("Create the pipeline before forward"));
+            return Err(Error::invalid("Create the pipeline before forward"));
         }
         let input = input.deep_clone()?;
         let mut raw = std::ptr::null_mut();
         let code = (*self.raw)
             .forward_1
-            .ok_or(Error::Invalid("Missing forward callback"))?(
+            .ok_or(Error::invalid("Missing forward callback"))?(
             self.raw,
             input.raw,
             &mut raw,
@@ -120,7 +120,7 @@ pub struct ModelBin {
 impl ModelBin {
     /// Builds a reader over owned copies of the supplied tensors.
     pub fn from_mats(weights: &[&Mat]) -> Result<Self> {
-        let count = i32::try_from(weights.len()).map_err(|_| Error::Invalid("Too many weights"))?;
+        let count = i32::try_from(weights.len()).map_err(|_| Error::invalid("Too many weights"))?;
         let owned: Vec<Mat> = weights
             .iter()
             .map(|m| m.deep_clone())

@@ -1,6 +1,7 @@
-use std::{ffi::NulError, fmt};
+use std::{borrow::Cow, ffi::NulError, fmt};
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Failure from the native layer or from a validated Rust check.
 pub enum Error {
     /// A native call failed without a named operation.
@@ -8,7 +9,10 @@ pub enum Error {
     /// A native call failed during a named operation.
     NativeAt(&'static str, i32),
     /// A caller argument or state failed validation.
-    Invalid(&'static str),
+    ///
+    /// Borrowed text covers constant failures; owned text carries the offending names,
+    /// shapes or lengths.
+    Invalid(Cow<'static, str>),
     /// The platform lacks the requested capability.
     Unsupported(&'static str),
     /// A string could not be converted to a C string.
@@ -23,7 +27,7 @@ impl fmt::Display for Error {
         match self {
             Self::Native(code) => write!(f, "ncnn returned {code}"),
             Self::NativeAt(operation, code) => write!(f, "ncnn {operation} returned {code}"),
-            Self::Invalid(message) => f.write_str(message),
+            Self::Invalid(message) => f.write_str(message.as_ref()),
             Self::Unsupported(message) => write!(f, "Unsupported capability: {message}"),
             Self::Nul(error) => error.fmt(f),
             Self::Io(error) => error.fmt(f),
@@ -31,6 +35,10 @@ impl fmt::Display for Error {
     }
 }
 impl Error {
+    /// Builds a validation failure from constant text or from formatted detail.
+    pub(crate) fn invalid(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::Invalid(message.into())
+    }
     /// Returns the upstream ncnn status code carried by a native failure.
     pub fn native_code(&self) -> Option<i32> {
         match self {

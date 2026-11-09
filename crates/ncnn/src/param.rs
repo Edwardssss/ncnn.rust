@@ -60,7 +60,7 @@ impl ParamDict {
     }
     fn check(id: i32) -> Result<()> {
         if !(0..32).contains(&id) {
-            return Err(Error::Invalid("Parameter id must be 0..32"));
+            return Err(Error::invalid("Parameter id must be 0..32"));
         }
         Ok(())
     }

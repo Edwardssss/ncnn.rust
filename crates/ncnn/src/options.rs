@@ -4,6 +4,7 @@ use std::{cell::Cell, marker::PhantomData, rc::Rc};
 #[derive(Clone, Copy, Debug)]
 #[repr(i32)]
 /// Identifies one native integer option.
+#[non_exhaustive]
 pub enum CpuOption {
     /// Native worker count.
     Threads = 0,
@@ -73,6 +74,7 @@ pub enum CpuOption {
 
 /// Independent native boolean preferences. Native capability dispatch remains authoritative.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum OptionFlag {
     /// Releases cached intermediate blobs after use.
     LightMode,
@@ -167,6 +169,14 @@ impl OptionFlag {
 }
 
 /// Native CPU option storage. `Net::configure` applies it to an unloaded network.
+///
+/// # Choosing between `Options` and `NetBuilder`
+///
+/// Both reach the same native option block. Use [`Net::builder`](crate::Net::builder) with
+/// `threads`, `flag` and `option` while a network is being created: those calls consume the
+/// builder and report a configuration failure before any model is read. Use [`Options`] when an
+/// option set is shared or prepared elsewhere, then hand it to
+/// [`Net::configure`](crate::Net::configure) once, before loading parameters.
 pub struct Options {
     pub(crate) raw: sys::ncnn_option_t,
     pub(crate) low_copy: Cell<bool>,
@@ -220,20 +230,20 @@ impl Options {
     pub fn set(&mut self, key: CpuOption, value: i32) -> Result<&mut Self> {
         match key {
             CpuOption::Threads if value < 1 => {
-                return Err(Error::Invalid("Thread count must be positive"))
+                return Err(Error::invalid("Thread count must be positive"))
             }
             CpuOption::OpenmpBlocktime | CpuOption::KvCacheSequenceHint if value < 0 => {
-                return Err(Error::Invalid("Value must be nonnegative"))
+                return Err(Error::invalid("Value must be nonnegative"))
             }
             CpuOption::FlushDenormals if !(0..=3).contains(&value) => {
-                return Err(Error::Invalid("Denormal mode must be 0..=3"))
+                return Err(Error::invalid("Denormal mode must be 0..=3"))
             }
             CpuOption::Threads
             | CpuOption::OpenmpBlocktime
             | CpuOption::KvCacheSequenceHint
             | CpuOption::FlushDenormals => {}
             _ if value != 0 && value != 1 => {
-                return Err(Error::Invalid("Boolean option must be 0 or 1"))
+                return Err(Error::invalid("Boolean option must be 0 or 1"))
             }
             _ => {}
         }

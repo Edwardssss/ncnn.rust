@@ -15,9 +15,9 @@ impl<'a> PixelImage<'a> {
         let stride = size
             .0
             .checked_mul(format.channels())
-            .ok_or(Error::Invalid("Pixel stride overflow"))?;
+            .ok_or(Error::invalid("Pixel stride overflow"))?;
         if stride.checked_mul(size.1) != Some(data.len()) {
-            return Err(Error::Invalid("Pixel buffer size mismatch"));
+            return Err(Error::invalid("Pixel buffer size mismatch"));
         }
         Self::with_stride(data, size, stride, format)
     }
@@ -31,21 +31,21 @@ impl<'a> PixelImage<'a> {
         let row = size
             .0
             .checked_mul(format.channels())
-            .ok_or(Error::Invalid("Pixel row overflow"))?;
+            .ok_or(Error::invalid("Pixel row overflow"))?;
         if size.0 == 0
             || size.1 == 0
             || stride < row
             || stride > i32::MAX as usize
             || size.1 > i32::MAX as usize
         {
-            return Err(Error::Invalid("Invalid image dimensions or stride"));
+            return Err(Error::invalid("Invalid image dimensions or stride"));
         }
         let count = (size.1 - 1)
             .checked_mul(stride)
             .and_then(|n| n.checked_add(row))
-            .ok_or(Error::Invalid("Image size overflow"))?;
+            .ok_or(Error::invalid("Image size overflow"))?;
         if count > data.len() || count > i32::MAX as usize {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Image rows exceed the buffer or native range",
             ));
         }
@@ -69,7 +69,7 @@ impl<'a> PixelImage<'a> {
                 .filter(|end| *end <= self.size.1)
                 .is_none()
         {
-            return Err(Error::Invalid("Image region is out of bounds"));
+            return Err(Error::invalid("Image region is out of bounds"));
         }
         let offset = origin
             .1
@@ -80,11 +80,11 @@ impl<'a> PixelImage<'a> {
                     .checked_mul(self.format.channels())
                     .and_then(|x| n.checked_add(x))
             })
-            .ok_or(Error::Invalid("Image offset overflow"))?;
+            .ok_or(Error::invalid("Image offset overflow"))?;
         let data = self
             .data
             .get(offset..)
-            .ok_or(Error::Invalid("Image region exceeds its buffer"))?;
+            .ok_or(Error::invalid("Image region exceeds its buffer"))?;
         Self::with_stride(data, size, self.stride, self.format)
     }
     fn conversion(self, destination: PixelFormat, target: (usize, usize)) -> Result<i32> {
@@ -94,7 +94,7 @@ impl<'a> PixelImage<'a> {
             .checked_mul(target.1)
             .and_then(|n| n.checked_mul(channels));
         if target.0 == 0 || target.1 == 0 || count.filter(|n| *n <= i32::MAX as usize).is_none() {
-            return Err(Error::Invalid("Target image exceeds native dimensions"));
+            return Err(Error::invalid("Target image exceeds native dimensions"));
         }
         Ok(if self.format == destination {
             self.format as i32
@@ -123,7 +123,7 @@ impl<'a> PixelImage<'a> {
     pub fn resize_to_mat(self, destination: PixelFormat, target: (usize, usize)) -> Result<Mat> {
         let kind = self.conversion(destination, target)?;
         if self.size != target && (self.size.0 < 2 || self.size.1 < 2) {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Bilinear source dimensions must be at least two",
             ));
         }
@@ -152,12 +152,12 @@ fn dimensions(w: usize, h: usize, channels: usize, len: usize) -> Result<(i32, i
         || w > i32::MAX as usize / channels
         || h > i32::MAX as usize
     {
-        return Err(Error::Invalid("Invalid image dimensions"));
+        return Err(Error::invalid("Invalid image dimensions"));
     }
     if w.checked_mul(h).and_then(|n| n.checked_mul(channels)) != Some(len)
         || len > isize::MAX as usize
     {
-        return Err(Error::Invalid("Image byte count mismatch"));
+        return Err(Error::invalid("Image byte count mismatch"));
     }
     Ok((w as i32, h as i32))
 }
@@ -171,7 +171,7 @@ pub fn resize(
 ) -> Result<Vec<u8>> {
     let (w, h) = dimensions(size.0, size.1, channels, data.len())?;
     if w < 2 || h < 2 {
-        return Err(Error::Invalid(
+        return Err(Error::invalid(
             "Bilinear source dimensions must be at least two",
         ));
     }
@@ -179,7 +179,7 @@ pub fn resize(
         .0
         .checked_mul(target.1)
         .and_then(|n| n.checked_mul(channels))
-        .ok_or(Error::Invalid("Image size overflow"))?;
+        .ok_or(Error::invalid("Image size overflow"))?;
     let (tw, th) = dimensions(target.0, target.1, channels, count)?;
     let mut out = vec![0; count];
     unsafe {
@@ -194,7 +194,7 @@ pub fn resize(
     Ok(out)
 }
 
-/// Applies an EXIF orientation (1–8), returning bytes and output dimensions.
+/// Applies an EXIF orientation (1鈥?), returning bytes and output dimensions.
 pub fn orient(
     data: &[u8],
     size: (usize, usize),
@@ -203,7 +203,7 @@ pub fn orient(
 ) -> Result<(Vec<u8>, (usize, usize))> {
     let (w, h) = dimensions(size.0, size.1, channels, data.len())?;
     if !(1..=8).contains(&orientation) {
-        return Err(Error::Invalid("Orientation must be 1..=8"));
+        return Err(Error::invalid("Orientation must be 1..=8"));
     }
     let target = if orientation >= 5 {
         (size.1, size.0)

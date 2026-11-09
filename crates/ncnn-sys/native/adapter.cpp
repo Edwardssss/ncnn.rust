@@ -388,6 +388,42 @@ extern "C" int ncnn_rs_mat_read_typed(ncnn_mat_t mat, int kind, float* out, size
     }
     return 0;
 }
+// The counterpart of the typed reader: one element width per tensor, filled plane by plane so
+// the channel padding ncnn reserves stays untouched.
+extern "C" int ncnn_rs_mat_copy_typed(int kind, const unsigned char* data, size_t size, int dims, const int* s, ncnn_mat_t* out)
+{
+    NCNN_RS_TRY
+    {
+        const size_t element_bytes = rs_element_bytes(kind);
+        if (!element_bytes || !out || (!data && size != 0) || dims < 1 || dims > 4)
+            return -1;
+
+        ncnn::Mat m;
+        if (dims == 1)
+            m.create(s[0], element_bytes, 1);
+        if (dims == 2)
+            m.create(s[0], s[1], element_bytes, 1);
+        if (dims == 3)
+            m.create(s[0], s[1], s[2], element_bytes, 1);
+        if (dims == 4)
+            m.create(s[0], s[1], s[2], s[3], element_bytes, 1);
+        if (m.empty())
+            return -100;
+
+        const size_t plane_elements = (size_t)m.w * m.h * m.d;
+        const size_t plane_bytes = plane_elements * element_bytes;
+        if (plane_bytes == 0 || (size_t)m.c > SIZE_MAX / plane_bytes)
+            return -1;
+        if ((size_t)m.c * plane_bytes != size)
+            return -1;
+
+        for (int q = 0; q < m.c; q++)
+            memcpy(m.channel(q), data + q * plane_bytes, plane_bytes);
+        *out = (ncnn_mat_t) new ncnn::Mat(m);
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
 // Native extraction converts packed, FP16, BF16 and INT8 blobs unless the caller passes a
 // non-zero type, which keeps the storage a layer wrote so Rust can read it by element kind.
 extern "C" int ncnn_rs_extractor_extract_stored(ncnn_extractor_t ex, const char* name, int type, ncnn_mat_t* out)

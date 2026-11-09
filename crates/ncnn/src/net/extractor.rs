@@ -7,6 +7,11 @@ use crate::net::blob::BlobKind;
 use std::{cell::Cell, ffi::CString, marker::PhantomData};
 
 /// Runs one request against a borrowed network.
+///
+/// # Thread affinity
+///
+/// An extractor borrows its network, so it stays on the thread that created both. A worker thread
+/// builds its own network and extractor instead of sharing them.
 pub struct Extractor<'net> {
     pub(crate) raw: sys::ncnn_extractor_t,
     pub(crate) _net: &'net Net,
@@ -38,12 +43,12 @@ impl Extractor<'_> {
     }
     fn validate_token(&self, blob: &BlobId, kind: BlobKind) -> Result<i32> {
         if !blob.belongs_to(&self._net.graph) {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Blob identifier belongs to another graph or an earlier load",
             ));
         }
         if blob.kind() != kind {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Blob identifier was resolved for the other endpoint kind",
             ));
         }
@@ -51,7 +56,7 @@ impl Extractor<'_> {
     }
     fn ensure_exposed_index(&self, index: i32, input: bool) -> Result<()> {
         if !self._net.ready {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Load the graph and weights before using blob indices",
             ));
         }
@@ -63,7 +68,7 @@ impl Extractor<'_> {
             }
         }
         if input {
-            return Err(Error::Invalid("Index is not an exposed input"));
+            return Err(Error::invalid("Index is not an exposed input"));
         }
         let outputs = unsafe { sys::ncnn_net_get_output_count(self._net.raw) };
         for slot in 0..outputs {
@@ -72,17 +77,17 @@ impl Extractor<'_> {
                 return Ok(());
             }
         }
-        Err(Error::Invalid("Index is not an exposed output"))
+        Err(Error::invalid("Index is not an exposed output"))
     }
     fn ensure_not_reserved(&self) -> Result<()> {
         if self._net.guard.output_borrowed.get() {
-            return Err(Error::Invalid("A scoped output reserves this network"));
+            return Err(Error::invalid("A scoped output reserves this network"));
         }
         Ok(())
     }
     fn ensure_borrowable(&self, stored: bool) -> Result<()> {
         if self._net.guard.extractors.get() != 1 || self._net.guard.output_borrowed.get() {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Scoped output requires the network's only live extractor",
             ));
         }
@@ -92,8 +97,8 @@ impl Extractor<'_> {
             // the FP32-converting guard path stays CPU-only.
             let device_stored = stored && self.low_copy.get() && self._net.has_device();
             if !device_stored {
-                return Err(Error::Invalid(
-                    "Low-copy outputs require safe configuration and built-in layers without raw-handle export",
+                return Err(Error::invalid(
+                    "Guarded outputs need the low-copy path: configure safe options before loading, avoid layer types that export raw handles, and keep one extractor per network; use extract_owned, infer or extract_stored_owned for independent storage instead",
                 ));
             }
         }
@@ -193,6 +198,22 @@ impl Extractor<'_> {
     /// caller asks for stored storage, so this form keeps the element width in
     /// [`TensorInfo`](crate::TensorInfo) and the caller names the scalar format through
     /// [`OutputGuard::to_f32_typed`] or [`OutputGuard::to_i8`].
+    ///
+    /// ```
+    /// let net = ncnn_rust::Net::builder()?.threads(1)?.load_bytes(
+    ///     "7767517\n2 2\nInput input 0 1 input\nQuantize quantize 1 1 input stored 0=1\n",
+    ///     &1.0f32.to_le_bytes(),
+    /// )?;
+    /// let mut extractor = net.extractor()?;
+    /// extractor.input("input", ncnn_rust::Mat::from_f32(&[0.4, -0.6], &[2])?)?;
+    /// let bytes = {
+    ///     let guard = extractor.extract_stored("stored")?;
+    ///     assert_eq!(guard.info().elemsize, 1);
+    ///     guard.to_i8()?
+    /// };
+    /// assert_eq!(bytes, [0, -1]);
+    /// # Ok::<(), ncnn_rust::Error>(())
+    /// ```
     pub fn extract_stored<'a>(
         &mut self,
         endpoint: impl Into<Endpoint<'a>>,
@@ -206,6 +227,16 @@ impl Extractor<'_> {
             network_borrowed: &self._net.guard.output_borrowed,
             _extractor: PhantomData,
         })
+    }
+    /// Returns stored storage with independent ownership.
+    ///
+    /// The result keeps the element width the producing layer wrote, so
+    /// [`Mat::to_f32_typed`](crate::Mat::to_f32_typed) or [`Mat::to_i8`](crate::Mat::to_i8)
+    /// applies. Use this form when the network may run more requests before the tensor is read.
+    pub fn extract_stored_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<Mat> {
+        let target = self.resolve(endpoint.into(), true)?;
+        let mat = self.extract_native(&target, true)?;
+        mat.deep_clone()
     }
     /// Returns validated values with independent owned storage.
     pub fn extract_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<FinalOutput> {

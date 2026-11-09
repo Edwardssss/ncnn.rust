@@ -47,6 +47,13 @@ impl GuardState {
 /// net.clear();
 /// ex.extract("output").unwrap();
 /// ```
+///
+/// # Thread affinity
+///
+/// A network, its extractors and the tensors they exchange belong to one thread. Native blob and
+/// device state is thread-affine, so `Net` is neither `Send` nor `Sync`; parallel work creates one
+/// network per thread and shares only the input bytes. `Arc<Net>` therefore needs one network per
+/// worker rather than a shared one.
 pub struct Net {
     pub(crate) raw: sys::ncnn_net_t,
     loaded: bool,
@@ -102,7 +109,7 @@ impl NetBuilder {
     /// Sets the native worker count.
     pub fn threads(self, count: usize) -> Result<Self> {
         let count = i32::try_from(count)
-            .map_err(|_| Error::Invalid("Thread count exceeds native range"))?;
+            .map_err(|_| Error::invalid("Thread count exceeds native range"))?;
         self.option(crate::CpuOption::Threads, count)
     }
     /// Loads parameters and weights from files.
@@ -131,7 +138,7 @@ impl Net {
     #[cfg(feature = "vulkan")]
     pub fn set_vulkan_device(&mut self, device: crate::gpu::Device) -> Result<()> {
         if self.loaded {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Select the backend before loading parameters",
             ));
         }
@@ -167,6 +174,22 @@ impl Net {
         })
     }
     /// Runs owned inputs and returns validated, independently owned final buffers.
+    ///
+    /// Every output is converted to FP32, so a network that returns quantized storage needs
+    /// [`infer_stored`](Self::infer_stored) instead.
+    ///
+    /// ```
+    /// let net = ncnn_rust::Net::builder()?.threads(1)?.load_bytes(
+    ///     "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+    ///     &[],
+    /// )?;
+    /// let outputs = net.infer(
+    ///     [("input", ncnn_rust::Mat::from_f32(&[-1.0, 2.0], &[2])?)],
+    ///     &["output"],
+    /// )?;
+    /// assert_eq!(outputs[0].values, [0.0, 2.0]);
+    /// # Ok::<(), ncnn_rust::Error>(())
+    /// ```
     pub fn infer(
         &self,
         inputs: impl IntoIterator<Item = (impl AsRef<str>, Mat)>,
@@ -179,6 +202,28 @@ impl Net {
         outputs
             .iter()
             .map(|name| extractor.extract_owned(Endpoint::Name(name)))
+            .collect()
+    }
+    /// Runs owned inputs and returns stored storage with the metadata of each output.
+    ///
+    /// The element width of every output is preserved, so a quantized model is readable through
+    /// [`Mat::to_f32_typed`](crate::Mat::to_f32_typed) or [`Mat::to_i8`](crate::Mat::to_i8).
+    pub fn infer_stored(
+        &self,
+        inputs: impl IntoIterator<Item = (impl AsRef<str>, Mat)>,
+        outputs: &[&str],
+    ) -> Result<Vec<(crate::TensorInfo, Mat)>> {
+        let mut extractor = self.extractor()?;
+        for (name, mat) in inputs {
+            extractor.input(Endpoint::Name(name.as_ref()), mat)?;
+        }
+        outputs
+            .iter()
+            .map(|name| {
+                let mat = extractor.extract_stored_owned(Endpoint::Name(name))?;
+                let info = mat.info();
+                Ok((info, mat))
+            })
             .collect()
     }
     /// Replaces a caller-owned vector with concatenated outputs in name order.
@@ -232,7 +277,7 @@ impl Net {
     /// Applies options to an unloaded network.
     pub fn configure(&mut self, options: &Options) -> Result<()> {
         if self.loaded {
-            return Err(Error::Invalid("Configure before loading parameters"));
+            return Err(Error::invalid("Configure before loading parameters"));
         }
         unsafe {
             sys::ncnn_net_set_option(self.raw, options.raw);
@@ -291,7 +336,7 @@ impl Net {
     /// replacing weights; detached outputs retain their independent storage.
     pub fn load_model(&mut self, data: &[u8]) -> Result<()> {
         if !self.loaded || self.ready {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Load parameters before loading weights once",
             ));
         }
@@ -319,7 +364,7 @@ impl Net {
     /// path permanently disables low-copy output guards for the network.
     pub unsafe fn load_model_file_native(&mut self, path: impl AsRef<Path>) -> Result<()> {
         if !self.loaded || self.ready {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Load parameters before loading weights once",
             ));
         }
@@ -335,7 +380,7 @@ impl Net {
             use std::os::windows::ffi::OsStrExt;
             let mut path: Vec<u16> = path.as_ref().as_os_str().encode_wide().collect();
             if path.contains(&0) {
-                return Err(Error::Invalid("Path contains a null character"));
+                return Err(Error::invalid("Path contains a null character"));
             }
             path.push(0);
             sys::ncnn_net_load_model_w(self.raw, path.as_ptr())
@@ -360,7 +405,7 @@ impl Net {
     /// Intermediate blobs are intentionally not accepted by this boundary.
     pub fn resolve_blob(&self, name: &str) -> Result<BlobId> {
         if !self.ready {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Load the graph and weights before resolving blobs",
             ));
         }
@@ -399,7 +444,7 @@ impl Net {
                 }
             }
         }
-        Err(Error::Invalid("Unknown graph input or output"))
+        Err(Error::invalid("Unknown graph input or output"))
     }
     /// Returns the input blob names in graph order.
     pub fn input_names(&self) -> Vec<String> {
@@ -437,10 +482,10 @@ impl Net {
     /// another input into an existing extractor preserves cached downstream blobs.
     pub fn extractor(&self) -> Result<Extractor<'_>> {
         if self.guard.output_borrowed.get() {
-            return Err(Error::Invalid("A scoped output reserves this network"));
+            return Err(Error::invalid("A scoped output reserves this network"));
         }
         if !self.ready {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Load parameters and weights before extraction",
             ));
         }
@@ -469,7 +514,7 @@ impl Net {
         userdata: *mut std::ffi::c_void,
     ) -> Result<()> {
         if self.loaded || creator.is_none() || destroyer.is_none() {
-            return Err(Error::Invalid(
+            return Err(Error::invalid(
                 "Register complete factories before loading parameters",
             ));
         }

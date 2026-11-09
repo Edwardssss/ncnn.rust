@@ -45,6 +45,7 @@ extern "C"
     int ncnn_rs_mat_normalized(ncnn_mat_t mat, const float* mean, const float* norm, ncnn_mat_t* out);
     int ncnn_rs_mat_read_f32(ncnn_mat_t mat, float* out, size_t count);
     int ncnn_rs_mat_read_typed(ncnn_mat_t mat, int kind, float* out, size_t count);
+    int ncnn_rs_mat_copy_typed(int kind, const unsigned char* data, size_t size, int dims, const int* shape, ncnn_mat_t* out);
     int ncnn_rs_extractor_extract_stored(ncnn_extractor_t ex, const char* name, int type, ncnn_mat_t* out);
     int ncnn_rs_extractor_extract_stored_index(ncnn_extractor_t ex, int index, int type, ncnn_mat_t* out);
     int ncnn_rs_mat_reshape(ncnn_mat_t mat, int dims, const int* shape, int independent, ncnn_mat_t* out);
