@@ -84,7 +84,7 @@ ex.extract_into(&output_id, &mut buffer)?;
 
 ## 验证
 
-CI 在 Linux x86-64、Linux ARM64、Windows、macOS x86-64 与 macOS Apple Silicon 上从源码构建 ncnn，然后运行格式化检查、Clippy、工作区测试、示例，以及两个包的发布试运行。另有独立作业检查声明的最低 Rust 版本，并在 Mesa lavapipe 软件设备上运行 Vulkan 契约。定时版本矩阵读取 `ci/ncnn-versions.json`，构建固定版本、最新版本与上一个版本，对照生成的绑定与库符号审计启用的 C API，并用原生 C++ 参考实现比对训练模型的输出。`cargo test` 覆盖仓库内的符合性测试集：算子家族与 Rust 参考循环逐元素比对；SDK 提供的其余每种 layer 类型各有一个加载与前向用例；算子家族覆盖不到的公开 API 路径；以及零分配的稳态检查。全部无需外部模型文件。
+CI 在 Linux x86-64、Linux ARM64、Windows、macOS x86-64 与 macOS Apple Silicon 上从源码构建 ncnn，然后运行格式化检查、Clippy、工作区测试、示例、两个包的发布试运行，以及一个依赖打包归档的独立 crate 的构建。另有独立作业检查声明的最低 Rust 版本，并在 Mesa lavapipe 软件设备上运行 Vulkan 契约；契约覆盖设备选择、分配器记账、常驻推理、守卫描述符、外部缓冲区导入、流水线缓存与跨设备拒绝。每月运行的版本矩阵读取 `ci/ncnn-versions.json`，构建固定版本、最新版本与上一个版本，对照生成的绑定与库符号审计启用的 C API，并用原生 C++ 参考实现比对训练模型的输出。`cargo test` 覆盖仓库内的符合性测试集：算子家族与 Rust 参考循环逐元素比对；SDK 提供的 108 种 layer 类型各有用例，其中 40 种执行到前向；算子家族覆盖不到的公开 API 路径；以及零分配的稳态检查。全部无需外部模型文件。
 
 ## 文档
 

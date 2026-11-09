@@ -103,14 +103,16 @@ for ReLU and AbsVal on CPU). Method and full tables: [Performance](docs/performa
 ## Validation
 
 CI builds ncnn from source on Linux x86-64, Linux ARM64, Windows, macOS x86-64 and macOS Apple
-Silicon, then runs formatting, Clippy, the workspace tests, the example and a publish dry run for
-both packages.
+Silicon, then runs formatting, Clippy, the workspace tests, the example, a publish dry run for both
+packages and a build of a separate crate that depends on the packaged archives.
 Separate jobs check the declared minimum Rust version and run the Vulkan contracts against the
-Mesa lavapipe software device. A scheduled version matrix reads `ci/ncnn-versions.json`, builds the pinned
-release plus the newest and previous tags, audits the enabled C API against generated bindings and
-library symbols, and compares trained-model output with a native C++ reference. `cargo test`
-covers the in-repo conformance suite: operator families compared against Rust reference loops,
-one load-and-forward case for every other layer type the SDK ships, the public API paths that
+Mesa lavapipe software device. The contracts cover device selection, allocator accounting,
+resident inference, guard descriptors, external buffer import, pipeline caches and cross-device
+rejection. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pinned release plus
+the newest and previous tags, audits the enabled C API against generated bindings and library
+symbols, and compares trained-model output with a native C++ reference. `cargo test` covers the
+in-repo conformance suite: operator families compared against Rust reference loops, a case for each
+of the 108 layer types the SDK ships, of which 40 reach a forward pass, the public API paths that
 the families do not reach, and a zero-allocation steady-state gate. No external model files are
 needed.
 
