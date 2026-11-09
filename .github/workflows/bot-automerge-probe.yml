@@ -1,0 +1,17 @@
+﻿name: Bot auto-merge probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  arm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Arm auto-merge as the workflow token
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash 8
