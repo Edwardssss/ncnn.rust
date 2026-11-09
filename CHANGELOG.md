@@ -13,8 +13,9 @@ library upgrade is a minor change of this crate.
   anchor offline, and a `v*` tag publishes both packages in dependency order before creating the
   GitHub release from the changelog section.
 - A probe test prints the finiteness of three attention configurations. The `ubuntu-24.04-arm`
-  runner returns the same finite values as x86-64 for all three, so the aarch64 exemption on the
-  attention layer case is gone and every case asserts finite output on every target.
+  runner matches x86-64 for the two-dimensional operand, while a three-dimensional operand with one
+  channel returns `NaN` for one sequence row there, so the layer case uses the two-dimensional form
+  and every case asserts finite output on every target again.
 
 ### Changed
 

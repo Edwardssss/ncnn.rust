@@ -247,7 +247,8 @@ fn cases() -> Vec<Case> {
             ]))
             .inputs(Inputs::One(&[4, 4])),
         // Attention loads eight blocks: four tagged projection weights and four raw
-        // biases. `2` is the product of the embedding width and the projected width.
+        // biases. `2` is the product of the embedding width and the projected width, and
+        // the operand is the two-dimensional (embedding, sequence) form the layer reads.
         Case::new("MultiHeadAttention", "0=4 1=2 2=16")
             .weights(support::blocks(&[
                 &tagged(&[0.25; 16]),
@@ -259,7 +260,7 @@ fn cases() -> Vec<Case> {
                 &tagged(&[0.25; 16]),
                 &support::raw(&[0.0; 4]),
             ]))
-            .inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
+            .inputs(Inputs::Three(&[4, 4], &[4, 4], &[4, 4])),
         Case::new("SDPA", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("RotaryEmbed", "").inputs(Inputs::Three(&[4, 4, 1], &[4, 4, 1], &[4, 4, 1])),
         Case::new("DeformableConv2D", "0=1 1=2 11=2 5=0 6=8")

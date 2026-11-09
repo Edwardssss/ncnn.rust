@@ -67,7 +67,8 @@ in-repo commands that exercise the same paths.
 
 - `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays, and the defect is reported upstream as Tencent/ncnn#7259.
 
-Every case asserts finite output on every target. The attention layer previously carried an
-aarch64 exemption; `invariants::attention_probe_reports_finiteness` now runs three configurations,
-and the `ubuntu-24.04-arm` runner returns the same finite values as x86-64 for all of them, so the
-exemption is gone.
+Every case asserts finite output on every target. The attention case feeds the two-dimensional
+(embedding, sequence) operand the layer reads: a three-dimensional operand with one channel returns
+`NaN` for the second sequence row on aarch64 Linux while the x86-64 run stays finite, which the
+dispatch of `invariants::attention_probe_reports_finiteness` recorded. The probe compares three
+configurations on every target, and the layer case no longer needs a per-target exemption.
