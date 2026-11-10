@@ -24,6 +24,14 @@ use std::{
 
 use blob::BlobKind;
 
+/// Converts a filesystem path into the UTF-8 form the native loaders accept.
+fn utf8_path(path: &Path) -> Result<CString> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| Error::invalid("The native loader needs a UTF-8 path"))?;
+    Ok(CString::new(text)?)
+}
+
 /// Low-copy eligibility shared by a network and the extractors created from it.
 pub(crate) struct GuardState {
     pub(crate) low_copy: Cell<bool>,
@@ -360,9 +368,24 @@ impl Net {
         }
         result
     }
-    /// Reads the text form from a file and applies [`load_param`](Self::load_param).
+    /// Reads the text form from a file with the native stdio loader.
+    ///
+    /// The native parser reads the file directly, so the parameter text never becomes a Rust
+    /// string. A path that is not valid UTF-8 is rejected, because the loader receives UTF-8.
     pub fn load_param_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        self.load_param(&std::fs::read_to_string(path)?)
+        let path = utf8_path(path.as_ref())?;
+        self.clear();
+        let result = unsafe {
+            status_at(
+                "load parameters",
+                sys::ncnn_rs_net_load_file(self.raw, path.as_ptr(), 0, 0),
+            )
+        };
+        self.loaded = result.is_ok();
+        if result.is_err() {
+            self.clear();
+        }
+        result
     }
     /// Loads parameters in the binary form that `ncnn2mem` writes.
     ///
@@ -407,9 +430,30 @@ impl Net {
         }
         result
     }
-    /// Reads the weights from a file and applies [`load_model`](Self::load_model).
+    /// Reads the weights from a file with the native stdio loader.
+    ///
+    /// The native loader reads the file itself, so the weights never pass through a Rust buffer and
+    /// the peak allocation stays at the per-layer copies ncnn keeps. Requirements match
+    /// [`load_model`](Self::load_model). [`load_model_file_native`](Self::load_model_file_native)
+    /// additionally maps the file instead of reading it.
     pub fn load_model_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        self.load_model(&std::fs::read(path)?)
+        if !self.loaded || self.ready {
+            return Err(Error::invalid(
+                "Load parameters before loading weights once",
+            ));
+        }
+        let path = utf8_path(path.as_ref())?;
+        let result = unsafe {
+            status_at(
+                "load weights",
+                sys::ncnn_rs_net_load_file(self.raw, path.as_ptr(), 1, 0),
+            )
+        };
+        self.ready = result.is_ok();
+        if result.is_err() {
+            self.clear();
+        }
+        result
     }
     /// Loads weights through the native path API, including configured memory mapping.
     ///

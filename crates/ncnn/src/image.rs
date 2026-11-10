@@ -1,4 +1,4 @@
-//! Checked CPU image views, color conversion, resizing, and orientation.
+//! Checked CPU image views, color conversion, resizing, orientation, and affine warping.
 use crate::{sys, Error, Mat, PixelFormat, Result};
 
 /// A borrowed pixel view with an explicit source format and row stride.
@@ -190,6 +190,99 @@ pub fn resize(
             _ => sys::ncnn_rs_image_resize_bilinear_c4,
         };
         call(data.as_ptr(), w, h, out.as_mut_ptr(), tw, th);
+    }
+    Ok(out)
+}
+
+/// Border treatment for [`warp_affine`].
+///
+/// The variants match the native border codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WarpBorder {
+    /// Fills the uncovered pixels with the supplied value.
+    Constant = 0,
+    /// Repeats the nearest edge pixel.
+    Replicate = 1,
+    /// Leaves the uncovered pixels untouched.
+    Transparent = 2,
+}
+
+/// Computes the affine matrix that maps one point set onto another.
+///
+/// `from` and `to` hold corresponding points as `[x, y]` pairs; three points describe a full affine
+/// transform and one point describes a translation. The result is the six coefficients in the order
+/// the native warp expects.
+pub fn affine_transform(from: &[[f32; 2]], to: &[[f32; 2]]) -> Result<[f32; 6]> {
+    if from.len() != to.len() || from.is_empty() || from.len() > 3 {
+        return Err(Error::invalid(
+            "An affine transform needs one to three matching point pairs",
+        ));
+    }
+    let flatten = |points: &[[f32; 2]]| -> Vec<f32> { points.iter().flatten().copied().collect() };
+    let points_from = flatten(from);
+    let points_to = flatten(to);
+    let mut matrix = [0.0f32; 6];
+    unsafe {
+        sys::ncnn_rs_image_get_affine_transform(
+            points_from.as_ptr(),
+            points_to.as_ptr(),
+            from.len() as i32,
+            matrix.as_mut_ptr(),
+        );
+    }
+    Ok(matrix)
+}
+
+/// Inverts an affine matrix, so a destination-to-source map can be used as a source-to-destination.
+pub fn invert_affine(matrix: &[f32; 6]) -> [f32; 6] {
+    let mut inverted = [0.0f32; 6];
+    unsafe {
+        sys::ncnn_rs_image_invert_affine_transform(matrix.as_ptr(), inverted.as_mut_ptr());
+    }
+    inverted
+}
+
+/// Warps a tightly packed one- to four-channel image with bilinear interpolation.
+///
+/// `matrix` maps destination coordinates to source coordinates, which is the form
+/// [`invert_affine`] produces from an [`affine_transform`]. `border` value fills the pixels that
+/// map outside the source.
+pub fn warp_affine(
+    data: &[u8],
+    size: (usize, usize),
+    channels: usize,
+    target: (usize, usize),
+    matrix: &[f32; 6],
+    border: WarpBorder,
+    value: u32,
+) -> Result<Vec<u8>> {
+    let (w, h) = dimensions(size.0, size.1, channels, data.len())?;
+    let count = target
+        .0
+        .checked_mul(target.1)
+        .and_then(|n| n.checked_mul(channels))
+        .ok_or(Error::invalid("Image size overflow"))?;
+    let (tw, th) = dimensions(target.0, target.1, channels, count)?;
+    let mut out = vec![0; count];
+    unsafe {
+        let call = match channels {
+            1 => sys::ncnn_rs_image_warpaffine_bilinear_c1,
+            2 => sys::ncnn_rs_image_warpaffine_bilinear_c2,
+            3 => sys::ncnn_rs_image_warpaffine_bilinear_c3,
+            _ => sys::ncnn_rs_image_warpaffine_bilinear_c4,
+        };
+        call(
+            data.as_ptr(),
+            w,
+            h,
+            out.as_mut_ptr(),
+            tw,
+            th,
+            matrix.as_ptr(),
+            border as i32,
+            value,
+        );
     }
     Ok(out)
 }

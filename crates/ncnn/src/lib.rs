@@ -36,7 +36,7 @@ mod param;
 
 pub use error::{Error, Result};
 pub use layer::{Layer, ModelBin};
-pub use mat::{BorderMode, ElementKind, Mat, PixelFormat, ReshapeView, TensorInfo};
+pub use mat::{BorderMode, Borders, ElementKind, Mat, PixelFormat, ReshapeView, TensorInfo};
 pub use net::{
     BlobId, BlobInfo, Endpoint, Extractor, FinalOutput, LayerInfo, Net, NetBuilder, OutputGuard,
     OutputRange,

@@ -265,6 +265,43 @@ impl Options {
         }
         Ok(self)
     }
+    /// Attaches a pool allocator for intermediate blobs.
+    ///
+    /// # Safety
+    ///
+    /// The allocator stays alive and usable until every network configured from this option block
+    /// is dropped, and no other network may claim the same pool at the same time. The native option
+    /// block stores the handle without taking ownership.
+    pub unsafe fn set_blob_allocator(&mut self, allocator: &crate::PoolAllocator) -> Result<()> {
+        sys::ncnn_option_set_blob_allocator(self.raw, allocator.as_raw());
+        Ok(())
+    }
+    /// Attaches a pool allocator for layer workspace.
+    ///
+    /// # Safety
+    ///
+    /// The same lifetime and exclusivity rules as
+    /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
+    pub unsafe fn set_workspace_allocator(
+        &mut self,
+        allocator: &crate::PoolAllocator,
+    ) -> Result<()> {
+        sys::ncnn_option_set_workspace_allocator(self.raw, allocator.as_raw());
+        Ok(())
+    }
+    /// Attaches the allocator that keeps an attention KV cache.
+    ///
+    /// The cache allocator must differ from the blob allocator, and
+    /// [`CpuOption::KvCacheSequenceHint`] sizes the cache for the longest sequence.
+    ///
+    /// # Safety
+    ///
+    /// The same lifetime and exclusivity rules as
+    /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
+    pub unsafe fn set_kvcache_allocator(&mut self, allocator: &crate::PoolAllocator) -> Result<()> {
+        sys::ncnn_option_set_kvcache_allocator(self.raw, allocator.as_raw());
+        Ok(())
+    }
     /// Reads one integer option.
     ///
     /// Reads come from the native block, so a value written through a raw handle is visible here.

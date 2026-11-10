@@ -41,8 +41,14 @@ extern "C"
     int ncnn_rs_option_set(ncnn_option_t opt, int key, int value);
     int ncnn_rs_option_get(ncnn_option_t opt, int key, int* value);
     int ncnn_rs_mat_copy_f32(const float* data, int dims, const int* shape, ncnn_mat_t* out);
+    int ncnn_rs_mat_copy_f32_batch(const float* data, int dims, const int* shape, int batch, ncnn_mat_t* out);
+    int ncnn_rs_mat_pack(ncnn_mat_t mat, int elempack, ncnn_mat_t* out);
+    int ncnn_rs_mat_flatten(ncnn_mat_t mat, ncnn_mat_t* out);
+    ncnn_datareader_t ncnn_rs_reader_file(const char* path);
+    int ncnn_rs_net_load_file(ncnn_net_t net, const char* path, int model, int mapped);
     int ncnn_rs_mat_clone(ncnn_mat_t mat, ncnn_mat_t* out);
     int ncnn_rs_mat_normalized(ncnn_mat_t mat, const float* mean, const float* norm, ncnn_mat_t* out);
+    int ncnn_rs_mat_normalize_in_place(ncnn_mat_t mat, const float* mean, const float* norm);
     int ncnn_rs_mat_read_f32(ncnn_mat_t mat, float* out, size_t count);
     int ncnn_rs_mat_read_typed(ncnn_mat_t mat, int kind, float* out, size_t count);
     int ncnn_rs_mat_copy_typed(int kind, const unsigned char* data, size_t size, int dims, const int* shape, ncnn_mat_t* out);
@@ -60,7 +66,9 @@ extern "C"
     int ncnn_rs_reference_add(const float* a, const float* b, int count, float* out);
     // Graph description of a loaded network. Names stay valid while the network is unchanged.
     // `flags` carries bit 0 support_vulkan, 1 support_vulkan_packing, 2 support_packing,
-    // 3 support_fp16_storage, 4 support_bf16_storage, 5 one_blob_only, 6 support_inplace.
+    // 3 support_fp16_storage, 4 support_bf16_storage, 5 one_blob_only, 6 support_inplace,
+    // 7 support_any_packing, 8 support_vulkan_any_packing, 9 support_int8_storage,
+    // 10 support_tensor_storage, 11 support_batch.
     int ncnn_rs_net_layer_info(ncnn_net_t net, int index, const char** name, const char** type,
                                int* typeindex, int* bottom_count, int* top_count, int* flags);
     int ncnn_rs_net_blob_count(ncnn_net_t net);

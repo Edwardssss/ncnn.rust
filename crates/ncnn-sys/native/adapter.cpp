@@ -7,6 +7,26 @@
 #include <vector>
 #include <cstdlib>
 #include "modelbin.h"
+#if _WIN32
+#include <windows.h>
+#endif
+
+// Native loaders and readers take narrow paths on every platform, so a UTF-8 path is widened on
+// Windows before it reaches them.
+static FILE* rs_fopen_utf8(const char* path)
+{
+#if _WIN32
+    const int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, 0, 0);
+    if (len <= 0)
+        return 0;
+    std::vector<wchar_t> wide((size_t)len);
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide.data(), len) <= 0)
+        return 0;
+    return _wfopen(wide.data(), L"rb");
+#else
+    return fopen(path, "rb");
+#endif
+}
 
 class OwnedModelBin : public ncnn::ModelBin
 {
@@ -250,6 +270,22 @@ extern "C" int ncnn_rs_mat_normalized(ncnn_mat_t mat, const float* mean, const f
             channels.dims = 3;
         channels.substract_mean_normalize(mean, norm);
         *out = (ncnn_mat_t) new ncnn::Mat(copy);
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
+extern "C" int ncnn_rs_mat_normalize_in_place(ncnn_mat_t mat, const float* mean, const float* norm)
+{
+    NCNN_RS_TRY
+    {
+        if (!mat)
+            return -1;
+        ncnn::Mat& m = *(ncnn::Mat*)mat;
+        // Same per-channel view as ncnn_rs_mat_normalized, applied to the caller's storage.
+        ncnn::Mat channels = m;
+        if (channels.dims < 3)
+            channels.dims = 3;
+        channels.substract_mean_normalize(mean, norm);
         return 0;
     }
     NCNN_RS_CATCH
@@ -594,6 +630,150 @@ extern "C" ncnn_datareader_t ncnn_rs_reader_memory(const unsigned char* data, si
 extern "C" size_t ncnn_rs_reader_reference(ncnn_datareader_t reader, size_t size, const void** out)
 {
     return ((ncnn::DataReader*)reader->pthis)->reference(size, out);
+}
+
+// Reads a file through stdio and closes it with the reader, so a stream larger than the addressable
+// buffer never needs a Rust-side copy. ncnn's stdio reader supplies the scan and read semantics.
+class FileReader : public ncnn::DataReaderFromStdio
+{
+  public:
+    explicit FileReader(FILE* f) : ncnn::DataReaderFromStdio(f), fp(f) {}
+    ~FileReader()
+    {
+        if (fp)
+            fclose(fp);
+    }
+
+  private:
+    FILE* fp;
+    FileReader(const FileReader&);
+    FileReader& operator=(const FileReader&);
+};
+extern "C" ncnn_datareader_t ncnn_rs_reader_file(const char* path)
+{
+    if (!path)
+        return 0;
+    FILE* fp = rs_fopen_utf8(path);
+    if (!fp)
+        return 0;
+    ncnn_datareader_t result = (ncnn_datareader_t)calloc(1, sizeof(*result));
+    if (!result)
+    {
+        fclose(fp);
+        return 0;
+    }
+    try
+    {
+        result->pthis = new FileReader(fp);
+    }
+    catch (...)
+    {
+        fclose(fp);
+        free(result);
+        return 0;
+    }
+    result->read = reader_read;
+    result->scan = memory_scan;
+    return result;
+}
+
+extern "C" int ncnn_rs_net_load_file(ncnn_net_t net, const char* path, int model, int mapped)
+{
+    NCNN_RS_TRY
+    {
+        if (!net || !path)
+            return -1;
+        ncnn::Net& n = *(ncnn::Net*)net->pthis;
+        const bool previous = n.opt.use_mapped_model_loading;
+        n.opt.use_mapped_model_loading = mapped != 0;
+        int ret = -1;
+#if _WIN32
+        const int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, 0, 0);
+        if (len > 0)
+        {
+            std::vector<wchar_t> wide((size_t)len);
+            if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide.data(), len) > 0)
+                ret = model ? n.load_model(wide.data()) : n.load_param(wide.data());
+        }
+#else
+        ret = model ? n.load_model(path) : n.load_param(path);
+#endif
+        n.opt.use_mapped_model_loading = previous;
+        return ret;
+    }
+    NCNN_RS_CATCH
+}
+
+extern "C" int ncnn_rs_mat_copy_f32_batch(const float* data, int dims, const int* s, int batch, ncnn_mat_t* out)
+{
+    NCNN_RS_TRY
+    {
+        if (!data || !s || !out || batch < 1)
+            return -1;
+        ncnn::Mat m;
+        if (dims == 1)
+            m.create(s[0], (size_t)4u, 1, batch);
+        if (dims == 2)
+            m.create(s[0], s[1], (size_t)4u, 1, batch);
+        if (dims == 3)
+            m.create(s[0], s[1], s[2], (size_t)4u, 1, batch);
+        if (dims == 4)
+            m.create(s[0], s[1], s[2], s[3], (size_t)4u, 1, batch);
+        if (m.empty())
+            return -100;
+        const size_t plane = (size_t)m.w * m.h * m.d;
+        for (int b = 0; b < m.n; b++)
+            for (int q = 0; q < m.c; q++)
+                memcpy((float*)m.data + (size_t)b * m.nstep + (size_t)q * m.cstep, data + ((size_t)b * m.c + q) * plane, plane * sizeof(float));
+        *out = (ncnn_mat_t) new ncnn::Mat(m);
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
+extern "C" int ncnn_rs_mat_pack(ncnn_mat_t mat, int elempack, ncnn_mat_t* out)
+{
+    NCNN_RS_TRY
+    {
+        if (!mat || !out || elempack < 1)
+            return -1;
+        const ncnn::Mat& m = *(const ncnn::Mat*)mat;
+        if (m.elempack == elempack)
+        {
+            ncnn::Mat copy = m.clone();
+            if (copy.empty())
+                return -100;
+            *out = (ncnn_mat_t) new ncnn::Mat(copy);
+            return 0;
+        }
+        ncnn::Option opt;
+        opt.num_threads = 1;
+        opt.use_packing_layout = true;
+        ncnn::Mat packed;
+        convert_packing(m, packed, elempack, opt);
+        if (packed.empty())
+            return -100;
+        *out = (ncnn_mat_t) new ncnn::Mat(packed);
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
+extern "C" int ncnn_rs_mat_flatten(ncnn_mat_t mat, ncnn_mat_t* out)
+{
+    NCNN_RS_TRY
+    {
+        if (!mat || !out)
+            return -1;
+        ncnn::Option opt;
+        opt.num_threads = 1;
+        opt.use_packing_layout = false;
+        ncnn::Mat flat;
+        ncnn::flatten(*(const ncnn::Mat*)mat, flat, opt);
+        if (flat.empty())
+            return -100;
+        *out = (ncnn_mat_t) new ncnn::Mat(flat);
+        return 0;
+    }
+    NCNN_RS_CATCH
 }
 
 extern "C" int ncnn_rs_load_bytes(ncnn_net_t net, const unsigned char* data, size_t size, int model)

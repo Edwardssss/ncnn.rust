@@ -82,6 +82,46 @@ pub struct TensorInfo {
     /// Native channel stride, which can exceed the logical plane size.
     pub cstep: usize,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Border sizes for the padding and crop helpers.
+///
+/// The two-dimensional helpers take the four in-plane values directly; this struct carries the
+/// depth pair that a four-axis tensor also needs.
+#[non_exhaustive]
+pub struct Borders {
+    /// Rows added or removed at the top.
+    pub top: usize,
+    /// Rows added or removed at the bottom.
+    pub bottom: usize,
+    /// Columns added or removed on the left.
+    pub left: usize,
+    /// Columns added or removed on the right.
+    pub right: usize,
+    /// Slices added or removed in front.
+    pub front: usize,
+    /// Slices added or removed behind.
+    pub behind: usize,
+}
+impl Borders {
+    /// Builds the in-plane border sizes with no depth change.
+    pub fn new(top: usize, bottom: usize, left: usize, right: usize) -> Self {
+        Self {
+            top,
+            bottom,
+            left,
+            right,
+            front: 0,
+            behind: 0,
+        }
+    }
+    /// Adds the depth pair, which only a four-axis tensor reads.
+    pub fn with_depth(mut self, front: usize, behind: usize) -> Self {
+        self.front = front;
+        self.behind = behind;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 /// Edge treatment of [`Mat::copy_make_border`].
@@ -206,6 +246,79 @@ impl Mat {
                 &mut raw,
             ))?;
             Self::owned(raw, true)
+        }
+    }
+    /// Copies batched FP32 values into a new tensor.
+    ///
+    /// `data` holds `batch` tensors one after another, each in channel-plane order. Layers that do
+    /// not declare `support_batch` still run, because ncnn splits the batch and joins the result.
+    /// [`TensorInfo::n`] reports the batch count, and [`to_f32`](Self::to_f32) reads the batches
+    /// back in the same order. The arithmetic helpers, normalization and reshape, stay single
+    /// batch.
+    pub fn from_f32_batch(data: &[f32], dimensions: &[usize], batch: usize) -> Result<Self> {
+        let (s, count) = shape(dimensions)?;
+        if batch == 0 || batch > i32::MAX as usize {
+            return Err(Error::invalid("Invalid batch count"));
+        }
+        let expected = count
+            .checked_mul(batch)
+            .ok_or_else(|| Error::invalid("Batched tensor length overflows"))?;
+        if data.len() != expected {
+            return Err(Error::invalid(format!(
+                "Data length {} does not match {batch} tensors of {count} elements",
+                data.len()
+            )));
+        }
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            status(sys::ncnn_rs_mat_copy_f32_batch(
+                data.as_ptr(),
+                dimensions.len() as i32,
+                s.as_ptr(),
+                batch as i32,
+                &mut raw,
+            ))?;
+            Self::owned(raw, true)
+        }
+    }
+    /// Collapses the tensor into one unpacked dimension.
+    ///
+    /// This is the shape a fully connected layer expects, and it runs on the native kernel. Packed
+    /// or padded storage is expanded first, so the result is unpacked FP32.
+    pub fn flatten(&self) -> Result<Self> {
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            status(sys::ncnn_rs_mat_flatten(self.raw, &mut raw))?;
+            Self::owned(raw, self.f32_known)
+        }
+    }
+    /// Returns a copy in another element packing.
+    ///
+    /// Packing groups consecutive elements of the packing axis into one lane, which is the layout
+    /// the packed SIMD kernels read. The request must divide the element count of that axis; a pack
+    /// of one returns unpacked storage. The values keep their relative order inside a lane, so a
+    /// packed tensor reads back in lane order rather than plane order; unpack it before comparing
+    /// against plane-ordered values.
+    pub fn with_packing(&self, elempack: i32) -> Result<Self> {
+        if elempack < 1 {
+            return Err(Error::invalid("Element packing must be positive"));
+        }
+        let info = self.info();
+        let axis = match info.dims {
+            1 => info.w,
+            2 => info.h,
+            3 | 4 => info.c,
+            _ => return Err(Error::invalid("Element packing needs a shaped tensor")),
+        };
+        if axis % elempack != 0 {
+            return Err(Error::invalid(
+                "Element packing must divide the packing axis",
+            ));
+        }
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            status(sys::ncnn_rs_mat_pack(self.raw, elempack, &mut raw))?;
+            Self::owned(raw, self.f32_known)
         }
     }
     /// Copies typed bytes into a new tensor of the given rank and extents.
@@ -506,6 +619,39 @@ impl Mat {
     pub fn reshape(&self, dimensions: &[usize]) -> Result<Self> {
         self.reshape_impl(dimensions, true)
     }
+    /// Reshapes in place, keeping the storage this tensor already owns.
+    ///
+    /// The native reshape only rewrites the header, so consuming the tensor is what makes the
+    /// alias safe: no other reference to this storage exists afterwards. This is the form to use on
+    /// the way into a network, and it costs no copy where [`reshape`](Self::reshape) has to
+    /// duplicate aliased storage.
+    pub fn into_reshape(self, dimensions: &[usize]) -> Result<Self> {
+        let (s, count) = shape(dimensions)?;
+        let m = self.info();
+        let (_, old_count) = shape(&[m.w as usize, m.h as usize, m.d as usize, m.c as usize])?;
+        if count != old_count || m.n != 1 || m.elempack != 1 {
+            return Err(Error::invalid(
+                "Reshape requires matching unpacked dimensions",
+            ));
+        }
+        let mut raw = std::ptr::null_mut();
+        let result = unsafe {
+            let code = sys::ncnn_rs_mat_reshape(
+                self.raw,
+                dimensions.len() as i32,
+                s.as_ptr(),
+                0,
+                &mut raw,
+            );
+            if code == 0 {
+                Self::owned(raw, self.f32_known)
+            } else {
+                Err(Error::NativeAt("reshape the tensor", code))
+            }
+        };
+        // The native result holds its own reference, so the source handle can release its share.
+        result
+    }
     /// Returns an explicitly read-only reshape that borrows this tensor.
     /// Native padding changes may allocate. No raw handle or mutable Mat escapes;
     /// the source borrow retains external allocator and adopted dependencies.
@@ -588,8 +734,8 @@ impl Mat {
             ));
         }
         self.f32_layout()?;
-        unsafe {
-            sys::ncnn_mat_substract_mean_normalize(
+        status(unsafe {
+            sys::ncnn_rs_mat_normalize_in_place(
                 self.raw,
                 if mean.is_empty() {
                     std::ptr::null()
@@ -601,8 +747,8 @@ impl Mat {
                 } else {
                     norm.as_ptr()
                 },
-            );
-        }
+            )
+        })?;
         Ok(())
     }
     /// Fills owned unpacked FP32 storage with one value.
@@ -617,6 +763,19 @@ impl Mat {
         }
         unsafe { sys::ncnn_mat_fill_float(self.raw, value) };
         Ok(())
+    }
+    /// Applies mean subtraction and scaling while consuming the tensor.
+    ///
+    /// Storage this crate owns is rewritten in place, so the call allocates nothing; any other
+    /// provenance copies first, which is what [`normalized`](Self::normalized) always does. Use
+    /// this form when the tensor is the caller's last reference and the request only needs the
+    /// normalized values.
+    pub fn into_normalized(mut self, mean: &[f32], norm: &[f32]) -> Result<Self> {
+        if self.provenance == Provenance::Owned {
+            self.normalize_in_place(mean, norm)?;
+            return Ok(self);
+        }
+        self.normalized(mean, norm)
     }
     fn ensure_writable(&self, operation: &'static str) -> Result<()> {
         if self.provenance != Provenance::Owned {
@@ -836,6 +995,84 @@ impl Mat {
             );
             Self::owned(raw, self.f32_known)
         }
+    }
+    /// Adds a border around a 4-D tensor, including the depth sides.
+    ///
+    /// The native 3-D padding kernel pads width, height and depth, which is what a 3-D convolution
+    /// graph needs. Requirements match [`copy_make_border`](Self::copy_make_border), and the tensor
+    /// must carry all four axes.
+    pub fn copy_make_border_3d(
+        &self,
+        borders: Borders,
+        mode: BorderMode,
+        value: f32,
+    ) -> Result<Self> {
+        let info = self.volume_layout("3-D border padding")?;
+        padded(info.w, borders.left, borders.right, "3-D border padding")?;
+        padded(info.h, borders.top, borders.bottom, "3-D border padding")?;
+        padded(info.d, borders.front, borders.behind, "3-D border padding")?;
+        let raw = unsafe { sys::ncnn_mat_create() };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        unsafe {
+            sys::ncnn_copy_make_border_3d(
+                self.raw,
+                raw,
+                native_extent(borders.top, "3-D border padding")?,
+                native_extent(borders.bottom, "3-D border padding")?,
+                native_extent(borders.left, "3-D border padding")?,
+                native_extent(borders.right, "3-D border padding")?,
+                native_extent(borders.front, "3-D border padding")?,
+                native_extent(borders.behind, "3-D border padding")?,
+                mode as i32,
+                value,
+                std::ptr::null_mut(),
+            );
+            Self::owned(raw, self.f32_known)
+        }
+    }
+    /// Removes rows, columns and depth slices from a 4-D tensor.
+    ///
+    /// This is the depth counterpart of [`copy_cut_border`](Self::copy_cut_border) and keeps at
+    /// least one element on every axis.
+    pub fn copy_cut_border_3d(&self, borders: Borders) -> Result<Self> {
+        let info = self.volume_layout("3-D border crop")?;
+        if borders.left.saturating_add(borders.right) >= info.w as usize
+            || borders.top.saturating_add(borders.bottom) >= info.h as usize
+            || borders.front.saturating_add(borders.behind) >= info.d as usize
+        {
+            return Err(Error::invalid(
+                "3-D border crop removes every element of an axis",
+            ));
+        }
+        let raw = unsafe { sys::ncnn_mat_create() };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        unsafe {
+            sys::ncnn_copy_cut_border_3d(
+                self.raw,
+                raw,
+                native_extent(borders.top, "3-D border crop")?,
+                native_extent(borders.bottom, "3-D border crop")?,
+                native_extent(borders.left, "3-D border crop")?,
+                native_extent(borders.right, "3-D border crop")?,
+                native_extent(borders.front, "3-D border crop")?,
+                native_extent(borders.behind, "3-D border crop")?,
+                std::ptr::null_mut(),
+            );
+            Self::owned(raw, self.f32_known)
+        }
+    }
+    fn volume_layout(&self, operation: &str) -> Result<TensorInfo> {
+        let info = self.info();
+        if info.dims != 4 || info.elempack != 1 || info.n != 1 || info.c <= 0 {
+            return Err(Error::invalid(format!(
+                "{operation} needs a 4-D unpacked single-batch tensor"
+            )));
+        }
+        Ok(info)
     }
     fn plane_layout(&self, operation: &str) -> Result<TensorInfo> {
         let info = self.info();

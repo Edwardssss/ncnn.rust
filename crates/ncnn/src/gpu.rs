@@ -186,17 +186,27 @@ impl Device {
     }
     /// Serializes native compatibility metadata, shaders, and Vulkan pipeline data.
     pub fn save_pipeline_cache(&self, path: impl AsRef<Path>) -> Result<()> {
+        std::fs::write(path, self.pipeline_cache()?)?;
+        Ok(())
+    }
+    /// Returns the serialized pipeline cache for storage outside the file system.
+    ///
+    /// The bytes are what [`save_pipeline_cache`](Self::save_pipeline_cache) writes, so a caller can
+    /// keep them in memory, in an archive or in another process's transport.
+    pub fn pipeline_cache(&self) -> Result<Vec<u8>> {
         let mut data = std::ptr::null_mut();
         let mut size = 0;
         status(unsafe { sys::ncnn_rs_gpu_cache_save(self.index, &mut data, &mut size) })?;
-        let result = std::fs::write(path, unsafe { std::slice::from_raw_parts(data, size) });
+        let bytes = unsafe { std::slice::from_raw_parts(data, size) }.to_vec();
         unsafe { sys::ncnn_rs_gpu_cache_free(data) };
-        result?;
-        Ok(())
+        Ok(bytes)
     }
     /// Rejects incompatible or corrupted native cache headers and payload hashes.
     pub fn load_pipeline_cache(&self, path: impl AsRef<Path>) -> Result<()> {
-        let data = std::fs::read(path)?;
+        self.set_pipeline_cache(&std::fs::read(path)?)
+    }
+    /// Loads a serialized pipeline cache produced by [`pipeline_cache`](Self::pipeline_cache).
+    pub fn set_pipeline_cache(&self, data: &[u8]) -> Result<()> {
         status(unsafe { sys::ncnn_rs_gpu_cache_load(self.index, data.as_ptr(), data.len()) })
     }
 }
