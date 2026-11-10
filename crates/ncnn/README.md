@@ -49,6 +49,11 @@ fn main() -> ncnn_rust::Result<()> {
 views borrow their tensor and expose logical initialized data. `input` transfers crate-owned
 storage; raw-adopted inputs are copied so external storage dependencies stay with the caller.
 
+Batched storage is built with `Mat::from_f32_batch`, and `TensorInfo::n` reports the batch count.
+`Mat::into_normalized` and `Mat::into_reshape` consume a tensor the caller no longer needs, which lets
+the native call run on that storage instead of on a duplicate; the `&self` forms keep returning
+independent storage. `Net::layers` and `Net::blobs` describe a loaded graph without running it.
+
 A fresh input can transfer storage and borrow an output while its extractor remains exclusively
 borrowed:
 

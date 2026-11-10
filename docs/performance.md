@@ -82,7 +82,9 @@ minimum of three runs to limit host noise:
 `normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one pass
 over the destination, so the copying form costs what a bare `deep_clone` costs instead of a clone
 followed by a native layer that walks the buffer again. Allocation and first touch dominate every row
-that allocates, which is why a rotation of the cases and a minimum over runs is used.
+that allocates, which is why a rotation of the cases and a minimum over runs is used. CI runs the same
+command in a debug build as a smoke check, so its printed medians verify the path rather than the
+timings.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
