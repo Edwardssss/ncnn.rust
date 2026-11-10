@@ -90,6 +90,8 @@ jobs:
         if: matrix.version == needs.resolve.outputs.pinned
         env:
           NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+          # The SDK is shared, so the test binaries need its directory on the loader path.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ncnn-${{ matrix.version }}/lib
         run: |
           cargo test --workspace
           python3 tools/check-coverage.py
@@ -98,6 +100,7 @@ jobs:
         if: matrix.version == needs.resolve.outputs.pinned
         env:
           NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ncnn-${{ matrix.version }}/lib
         run: |
           cmake -S crates/ncnn/tests/native -B target/reference-${{ matrix.version }} -DCMAKE_BUILD_TYPE=Release
           cmake --build target/reference-${{ matrix.version }} --config Release -j "$(nproc)"
