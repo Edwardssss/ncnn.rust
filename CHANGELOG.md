@@ -16,8 +16,8 @@ library upgrade is a minor change of this crate.
   without a copy and `Net::infer_borrowed` bounds the borrow to one request.
 - `Net::option` reads the option value a loaded network actually uses.
 - Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
-  `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border`,
-  `Mat::from_pixels_roi`, `Mat::from_pixels_roi_resize` and the `BorderMode` argument.
+  `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border` and the
+  `BorderMode` argument.
 - `Net::load_param_reader` and `Net::load_model_reader` load from a `DataReader`, and
   `register_custom_layer_by_typeindex` registers a factory for a type index.
 - CI compares the public API with the published release, resolves every documentation link and

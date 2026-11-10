@@ -87,10 +87,9 @@ produces a writable copy. The rule keeps a caller-managed allocation out of reac
 
 `to_pixels` and `to_pixels_resize` write interleaved bytes into a caller buffer and require one
 unpacked FP32 single-batch plane per channel, a stride of at least one row and a buffer of
-`stride * height` bytes, so a wider stride keeps its remaining bytes untouched. `from_pixels_roi` and
-`from_pixels_roi_resize` read one rectangle of a frame and validate the image size, the stride and the
-rectangle before the native call; `from_pixels_roi_resize` runs the crop and the bilinear resize in a
-single native pass. `copy_make_border` and `copy_cut_border` run the native padding and crop kernels,
+`stride * height` bytes, so a wider stride keeps its remaining bytes untouched. Pixel input stays
+with `PixelImage`, which validates the format, the stride and the rectangle before conversion or
+resizing. `copy_make_border` and `copy_cut_border` run the native padding and crop kernels,
 require a 2-D or 3-D unpacked single-batch tensor and reject a border that leaves no rows or columns.
 The native border copy returns no status, so the wrapper checks the arguments up front and reports an
 empty result as `Error::Native`.

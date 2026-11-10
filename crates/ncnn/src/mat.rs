@@ -180,60 +180,6 @@ fn padded(extent: i32, before: usize, after: usize, operation: &str) -> Result<i
         .map(|total| total as i32)
         .ok_or_else(|| Error::invalid(format!("{operation} exceeds the native extent range")))
 }
-fn checked_pixel_input(
-    data: &[u8],
-    format: PixelFormat,
-    size: (usize, usize),
-    stride: usize,
-    operation: &str,
-) -> Result<i32> {
-    if size.0 == 0 || size.1 == 0 || size.0 > i32::MAX as usize || size.1 > i32::MAX as usize {
-        return Err(Error::invalid(format!(
-            "{operation} needs a non-empty image inside the native extent range"
-        )));
-    }
-    let row = size
-        .0
-        .checked_mul(format.channels())
-        .ok_or_else(|| Error::invalid(format!("{operation} row overflows")))?;
-    if stride < row {
-        return Err(Error::invalid(format!(
-            "{operation} needs a stride of at least one row"
-        )));
-    }
-    let needed = stride
-        .checked_mul(size.1 - 1)
-        .and_then(|offset| offset.checked_add(row))
-        .ok_or_else(|| Error::invalid(format!("{operation} image overflows")))?;
-    if data.len() < needed {
-        return Err(Error::invalid(format!(
-            "{operation} needs {needed} bytes for the image but received {}",
-            data.len()
-        )));
-    }
-    native_extent(stride, operation)
-}
-fn checked_rect(
-    size: (usize, usize),
-    rect: (usize, usize, usize, usize),
-) -> Result<(i32, i32, i32, i32)> {
-    let (x, y, width, height) = rect;
-    let inside = |offset: usize, length: usize, limit: usize| match offset.checked_add(length) {
-        Some(end) => end <= limit,
-        None => false,
-    };
-    if width == 0 || height == 0 || !inside(x, width, size.0) || !inside(y, height, size.1) {
-        return Err(Error::invalid(
-            "The rectangle must be non-empty and inside the image",
-        ));
-    }
-    Ok((
-        native_extent(x, "Pixel ROI")?,
-        native_extent(y, "Pixel ROI")?,
-        native_extent(width, "Pixel ROI")?,
-        native_extent(height, "Pixel ROI")?,
-    ))
-}
 impl Mat {
     /// Copies FP32 values into a new tensor of the given rank and extents.
     ///
@@ -899,76 +845,6 @@ impl Mat {
             )));
         }
         Ok(info)
-    }
-    /// Copies a rectangle of interleaved pixels into a new tensor.
-    ///
-    /// `size` is the whole image, `stride` its row distance in bytes and `rect` is `(x, y, width,
-    /// height)` inside it. The native kernel reads only the rectangle, so a caller that already
-    /// holds a frame crops and converts in one pass.
-    pub fn from_pixels_roi(
-        data: &[u8],
-        format: PixelFormat,
-        size: (usize, usize),
-        stride: usize,
-        rect: (usize, usize, usize, usize),
-    ) -> Result<Self> {
-        let stride = checked_pixel_input(data, format, size, stride, "Pixel ROI")?;
-        let (x, y, width, height) = checked_rect(size, rect)?;
-        unsafe {
-            Self::owned(
-                sys::ncnn_mat_from_pixels_roi(
-                    data.as_ptr(),
-                    format as i32,
-                    size.0 as i32,
-                    size.1 as i32,
-                    stride,
-                    x,
-                    y,
-                    width,
-                    height,
-                    std::ptr::null_mut(),
-                ),
-                true,
-            )
-        }
-    }
-    /// Copies a rectangle of interleaved pixels into a tensor of another size.
-    ///
-    /// The crop and the bilinear resize run in one native pass, which is the detector
-    /// preprocessing path: no cropped intermediate is materialized. Arguments match
-    /// [`from_pixels_roi`](Self::from_pixels_roi), and `target` is the output size.
-    pub fn from_pixels_roi_resize(
-        data: &[u8],
-        format: PixelFormat,
-        size: (usize, usize),
-        stride: usize,
-        rect: (usize, usize, usize, usize),
-        target: (usize, usize),
-    ) -> Result<Self> {
-        let stride = checked_pixel_input(data, format, size, stride, "Pixel ROI resize")?;
-        let (x, y, width, height) = checked_rect(size, rect)?;
-        if target.0 == 0 || target.1 == 0 {
-            return Err(Error::invalid("The target size must be non-empty"));
-        }
-        unsafe {
-            Self::owned(
-                sys::ncnn_mat_from_pixels_roi_resize(
-                    data.as_ptr(),
-                    format as i32,
-                    size.0 as i32,
-                    size.1 as i32,
-                    stride,
-                    x,
-                    y,
-                    width,
-                    height,
-                    native_extent(target.0, "Pixel ROI resize")?,
-                    native_extent(target.1, "Pixel ROI resize")?,
-                    std::ptr::null_mut(),
-                ),
-                true,
-            )
-        }
     }
     /// Copies interleaved pixels into a new tensor.
     pub fn from_pixels(

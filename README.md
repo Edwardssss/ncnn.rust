@@ -23,7 +23,7 @@ The repository contains two packages:
 - Scoped read-only CPU output guards that reserve the network without copying.
 - Graph-bound endpoint tokens that reject foreign or reloaded graphs.
 - Tensors, image preprocessing, custom layers, readers and allocators, including in-place
-  normalization, letterbox borders, crops and rectangle pixel input.
+  normalization, pixel output and letterbox borders.
 - Effective option readback on a loaded network and per-extractor option overrides.
 - Optional Vulkan backend: device selection, resident tensors, allocator, recording
   commands, completed guards, buffer import and persistent pipeline caches.

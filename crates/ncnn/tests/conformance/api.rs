@@ -209,7 +209,7 @@ fn pixels_round_trip_through_a_tensor() {
 }
 
 #[test]
-fn borders_and_pixel_rectangles_run_on_the_native_kernels() {
+fn borders_run_on_the_native_padding_and_crop_kernels() {
     let tensor = Mat::from_f32(&[1., 2., 3., 4.], &[2, 2]).unwrap();
     let padded = tensor
         .copy_make_border(1, 1, 1, 1, ncnn_rust::BorderMode::Replicate, 0.)
@@ -250,51 +250,6 @@ fn borders_and_pixel_rectangles_run_on_the_native_kernels() {
         .flat_map(|row| [1usize, 2].map(|column| values[row * 4 + column]))
         .collect();
     assert_eq!(interior, [1., 2., 3., 4.], "the mirror keeps the source");
-
-    // One row of three pixels at a stride that leaves the last bytes unused.
-    let pixels = [1u8, 2, 3, 4, 5, 6, 7, 8];
-    let cropped = Mat::from_pixels_roi(
-        &pixels,
-        ncnn_rust::PixelFormat::Gray,
-        (8, 1),
-        8,
-        (5, 0, 3, 1),
-    )
-    .unwrap();
-    assert_eq!(cropped.info().w, 3);
-    assert_eq!(cropped.to_f32().unwrap(), [6., 7., 8.]);
-    let narrowed = Mat::from_pixels_roi_resize(
-        &pixels,
-        ncnn_rust::PixelFormat::Gray,
-        (8, 1),
-        8,
-        (0, 0, 4, 1),
-        (2, 1),
-    )
-    .unwrap();
-    assert_eq!(narrowed.info().w, 2);
-    assert!(
-        Mat::from_pixels_roi(
-            &pixels,
-            ncnn_rust::PixelFormat::Gray,
-            (8, 1),
-            8,
-            (6, 0, 3, 1)
-        )
-        .is_err(),
-        "a rectangle that leaves the image is rejected"
-    );
-    assert!(
-        Mat::from_pixels_roi(
-            &pixels,
-            ncnn_rust::PixelFormat::Rgb,
-            (8, 1),
-            8,
-            (0, 0, 2, 1)
-        )
-        .is_err(),
-        "a stride below one row is rejected"
-    );
 }
 
 #[test]
