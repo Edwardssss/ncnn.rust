@@ -148,3 +148,18 @@ jobs:
           else
             gh issue create --title "$title" --body "$body"
           fi
+
+      # The tracking issue describes a state, so a passing run ends it.
+      - name: Close the tracking issue
+        if: needs.compat.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="ncnn version matrix failure"
+          existing=$(gh issue list --search "$title in:title" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "The matrix passed (run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            gh issue close "$existing" --reason completed
+          else
+            echo "no open tracking issue"
+          fi

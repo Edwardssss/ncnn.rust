@@ -22,7 +22,8 @@ adapter is compiled against one release and cannot link another.
 
 Because the pinned release is the newest tag today, `latest` and `previous` resolve to the two
 releases below it, so the matrix records how far back the pinned headers reach. A failure in a
-pinned row opens or updates a tracking issue.
+pinned row opens or updates a tracking issue, and a passing run comments on that issue and closes it,
+so an open tracker means the matrix is currently failing.
 
 ## Targets
 

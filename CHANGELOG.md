@@ -19,7 +19,8 @@ library upgrade is a minor change of this crate.
   line coverage, and rejects a report without `DA` records.
 - The nightly fuzz workflow runs its target on the nightly toolchain, which `rust-toolchain.toml`
   otherwise shadows, and the version matrix resolves tags with `GITHUB_TOKEN`, imports the shared SDK
-  into the loader path, and reports the declaration gap for tags that cannot link the adapter.
+  into the loader path, and reports the declaration gap for tags that cannot link the adapter. A
+  passing matrix run comments on the open tracking issue and closes it.
 - Both CPU examples and both device examples run in CI, and rustdoc builds with `-D warnings` on
   every push instead of only during the documentation deploy.
 - A probe test prints the finiteness of three attention configurations. The `ubuntu-24.04-arm`
