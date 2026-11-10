@@ -84,6 +84,22 @@ pub struct TensorInfo {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
+/// Edge treatment of [`Mat::copy_make_border`].
+///
+/// The variant follows the native padding mode, so a `Reflect` border mirrors the image and a
+/// `Replicate` border repeats the edge row.
+#[non_exhaustive]
+pub enum BorderMode {
+    /// Fills the added rows and columns with the supplied value.
+    Constant = 0,
+    /// Repeats the edge row and column into the border.
+    Replicate = 1,
+    /// Mirrors the image into the border without repeating the edge row and column.
+    Reflect = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
 /// Source and destination pixel layout for image conversion.
 #[non_exhaustive]
 pub enum PixelFormat {
@@ -115,6 +131,8 @@ impl PixelFormat {
 pub(crate) enum Provenance {
     Owned,
     Adopted,
+    /// Borrows caller storage; the tensor never frees it and cannot transfer it.
+    External,
 }
 
 /// An owned tensor handle released through the native allocator.
@@ -149,6 +167,72 @@ pub(crate) fn shape(shape: &[usize]) -> Result<([i32; 4], usize)> {
         return Err(Error::invalid("Tensor exceeds addressable length"));
     }
     Ok((native, count))
+}
+fn native_extent(value: usize, operation: &str) -> Result<i32> {
+    i32::try_from(value)
+        .map_err(|_| Error::invalid(format!("{operation} exceeds the native extent range")))
+}
+fn padded(extent: i32, before: usize, after: usize, operation: &str) -> Result<i32> {
+    (extent as usize)
+        .checked_add(before)
+        .and_then(|total| total.checked_add(after))
+        .filter(|total| *total <= i32::MAX as usize)
+        .map(|total| total as i32)
+        .ok_or_else(|| Error::invalid(format!("{operation} exceeds the native extent range")))
+}
+fn checked_pixel_input(
+    data: &[u8],
+    format: PixelFormat,
+    size: (usize, usize),
+    stride: usize,
+    operation: &str,
+) -> Result<i32> {
+    if size.0 == 0 || size.1 == 0 || size.0 > i32::MAX as usize || size.1 > i32::MAX as usize {
+        return Err(Error::invalid(format!(
+            "{operation} needs a non-empty image inside the native extent range"
+        )));
+    }
+    let row = size
+        .0
+        .checked_mul(format.channels())
+        .ok_or_else(|| Error::invalid(format!("{operation} row overflows")))?;
+    if stride < row {
+        return Err(Error::invalid(format!(
+            "{operation} needs a stride of at least one row"
+        )));
+    }
+    let needed = stride
+        .checked_mul(size.1 - 1)
+        .and_then(|offset| offset.checked_add(row))
+        .ok_or_else(|| Error::invalid(format!("{operation} image overflows")))?;
+    if data.len() < needed {
+        return Err(Error::invalid(format!(
+            "{operation} needs {needed} bytes for the image but received {}",
+            data.len()
+        )));
+    }
+    native_extent(stride, operation)
+}
+fn checked_rect(
+    size: (usize, usize),
+    rect: (usize, usize, usize, usize),
+) -> Result<(i32, i32, i32, i32)> {
+    let (x, y, width, height) = rect;
+    let inside = |offset: usize, length: usize, limit: usize| match offset.checked_add(length) {
+        Some(end) => end <= limit,
+        None => false,
+    };
+    if width == 0 || height == 0 || !inside(x, width, size.0) || !inside(y, height, size.1) {
+        return Err(Error::invalid(
+            "The rectangle must be non-empty and inside the image",
+        ));
+    }
+    Ok((
+        native_extent(x, "Pixel ROI")?,
+        native_extent(y, "Pixel ROI")?,
+        native_extent(width, "Pixel ROI")?,
+        native_extent(height, "Pixel ROI")?,
+    ))
 }
 impl Mat {
     /// Copies FP32 values into a new tensor of the given rank and extents.
@@ -537,6 +621,353 @@ impl Mat {
                 &mut raw,
             ))?;
             Self::owned(raw, true)
+        }
+    }
+    /// Applies mean subtraction and scaling in place, without a second allocation.
+    ///
+    /// The tensor must own its storage: a tensor adopted from a raw handle, or built over an
+    /// external buffer, returns [`Error::Invalid`] because the write would reach memory the caller
+    /// still manages. Lengths follow [`normalized`](Self::normalized).
+    pub fn normalize_in_place(&mut self, mean: &[f32], norm: &[f32]) -> Result<()> {
+        self.ensure_writable("In-place normalization")?;
+        let m = self.info();
+        if !self.f32_known || m.elemsize != 4 || m.elempack != 1 || m.n != 1 {
+            return Err(Error::invalid("Normalization requires unpacked FP32"));
+        }
+        if (!mean.is_empty() && mean.len() != m.c as usize)
+            || (!norm.is_empty() && norm.len() != m.c as usize)
+        {
+            return Err(Error::invalid(
+                "Normalization requires one value per channel",
+            ));
+        }
+        self.f32_layout()?;
+        unsafe {
+            sys::ncnn_mat_substract_mean_normalize(
+                self.raw,
+                if mean.is_empty() {
+                    std::ptr::null()
+                } else {
+                    mean.as_ptr()
+                },
+                if norm.is_empty() {
+                    std::ptr::null()
+                } else {
+                    norm.as_ptr()
+                },
+            );
+        }
+        Ok(())
+    }
+    /// Fills owned unpacked FP32 storage with one value.
+    ///
+    /// This is the allocation-free way to clear a reusable input buffer. The storage rules match
+    /// [`normalize_in_place`](Self::normalize_in_place).
+    pub fn fill(&mut self, value: f32) -> Result<()> {
+        self.ensure_writable("In-place fill")?;
+        let m = self.info();
+        if !self.f32_known || m.elemsize != 4 || m.elempack != 1 {
+            return Err(Error::invalid("Fill requires unpacked FP32 storage"));
+        }
+        unsafe { sys::ncnn_mat_fill_float(self.raw, value) };
+        Ok(())
+    }
+    fn ensure_writable(&self, operation: &'static str) -> Result<()> {
+        if self.provenance != Provenance::Owned {
+            return Err(Error::invalid(format!(
+                "{operation} writes through the tensor, so it needs storage this tensor owns; copy it with deep_clone first"
+            )));
+        }
+        Ok(())
+    }
+    /// Builds a tensor that borrows caller storage instead of copying it.
+    ///
+    /// The native tensor keeps the pointer, so this is the zero-copy input path: a caller that
+    /// already holds frame data avoids one copy per request. Reads through the returned tensor
+    /// behave like any other tensor, and the tensor never frees the buffer.
+    ///
+    /// # Safety
+    ///
+    /// `data` must stay alive, keep its length and stay free of mutable aliases until this tensor
+    /// and every native object that received it are dropped. An extractor that submitted it holds
+    /// the pointer until it is dropped, so the borrow has to cover the extraction. Use
+    /// [`Net::infer_borrowed`](crate::Net::infer_borrowed) when the borrow only has to cover one
+    /// request.
+    pub unsafe fn from_external(data: &[f32], dimensions: &[usize]) -> Result<Self> {
+        let (s, count) = shape(dimensions)?;
+        if data.len() != count {
+            return Err(Error::invalid(format!(
+                "Data length {} does not match a shape of {count} elements",
+                data.len()
+            )));
+        }
+        let pointer = data.as_ptr().cast_mut().cast::<std::ffi::c_void>();
+        let raw = match dimensions.len() {
+            1 => sys::ncnn_mat_create_external_1d(s[0], pointer, std::ptr::null_mut()),
+            2 => sys::ncnn_mat_create_external_2d(s[0], s[1], pointer, std::ptr::null_mut()),
+            3 => sys::ncnn_mat_create_external_3d(s[0], s[1], s[2], pointer, std::ptr::null_mut()),
+            _ => sys::ncnn_mat_create_external_4d(
+                s[0],
+                s[1],
+                s[2],
+                s[3],
+                pointer,
+                std::ptr::null_mut(),
+            ),
+        };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        Ok(Self {
+            raw,
+            f32_known: true,
+            provenance: Provenance::External,
+            _thread: PhantomData,
+        })
+    }
+    /// Converts unpacked FP32 planes into interleaved pixels.
+    ///
+    /// `stride` is the destination distance between rows in bytes and must cover
+    /// `width * format.channels()`. `out` must hold `stride * height` bytes; the remaining bytes of
+    /// a wider stride stay untouched.
+    pub fn to_pixels(&self, format: PixelFormat, stride: usize, out: &mut [u8]) -> Result<()> {
+        let (width, height) = self.pixel_layout(format)?;
+        let row = (width as usize)
+            .checked_mul(format.channels())
+            .ok_or(Error::invalid("Pixel row overflows"))?;
+        if stride < row {
+            return Err(Error::invalid("Pixel stride is shorter than one row"));
+        }
+        let needed = stride
+            .checked_mul(height as usize)
+            .ok_or(Error::invalid("Pixel buffer overflows"))?;
+        if out.len() < needed {
+            return Err(Error::invalid("Pixel buffer is too small for the stride"));
+        }
+        unsafe {
+            sys::ncnn_mat_to_pixels(
+                self.raw,
+                out.as_mut_ptr(),
+                format as i32,
+                i32::try_from(stride)
+                    .map_err(|_| Error::invalid("Pixel stride exceeds native range"))?,
+            );
+        }
+        Ok(())
+    }
+    /// Converts unpacked FP32 planes into interleaved pixels of another size.
+    ///
+    /// The resize uses the native bilinear path. Buffer requirements match
+    /// [`to_pixels`](Self::to_pixels) with the target width and height.
+    pub fn to_pixels_resize(
+        &self,
+        format: PixelFormat,
+        target: (usize, usize),
+        stride: usize,
+        out: &mut [u8],
+    ) -> Result<()> {
+        self.pixel_layout(format)?;
+        if target.0 == 0
+            || target.1 == 0
+            || target.0 > i32::MAX as usize
+            || target.1 > i32::MAX as usize
+        {
+            return Err(Error::invalid("Invalid target size"));
+        }
+        let row = target
+            .0
+            .checked_mul(format.channels())
+            .ok_or(Error::invalid("Pixel row overflows"))?;
+        if stride < row {
+            return Err(Error::invalid("Pixel stride is shorter than one row"));
+        }
+        let needed = stride
+            .checked_mul(target.1)
+            .ok_or(Error::invalid("Pixel buffer overflows"))?;
+        if out.len() < needed {
+            return Err(Error::invalid("Pixel buffer is too small for the stride"));
+        }
+        unsafe {
+            sys::ncnn_mat_to_pixels_resize(
+                self.raw,
+                out.as_mut_ptr(),
+                format as i32,
+                i32::try_from(target.0)
+                    .map_err(|_| Error::invalid("Target width exceeds native range"))?,
+                i32::try_from(target.1)
+                    .map_err(|_| Error::invalid("Target height exceeds native range"))?,
+                i32::try_from(stride)
+                    .map_err(|_| Error::invalid("Pixel stride exceeds native range"))?,
+            );
+        }
+        Ok(())
+    }
+    fn pixel_layout(&self, format: PixelFormat) -> Result<(i32, i32)> {
+        let (info, _) = self.f32_layout()?;
+        if info.c as usize != format.channels() {
+            return Err(Error::invalid(format!(
+                "Pixel conversion of a {} channel tensor into a {} channel format",
+                info.c,
+                format.channels()
+            )));
+        }
+        if info.d != 1 {
+            return Err(Error::invalid(
+                "Pixel conversion needs a single-plane tensor",
+            ));
+        }
+        Ok((info.w, info.h))
+    }
+    /// Adds a border around every plane with the native padding kernel.
+    ///
+    /// This is the letterbox step: the native kernel writes the border instead of a Rust-side loop.
+    /// The tensor must be a 2-D or 3-D unpacked single-batch tensor, and the result keeps the
+    /// element width and the rank of `self`.
+    pub fn copy_make_border(
+        &self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+        mode: BorderMode,
+        value: f32,
+    ) -> Result<Self> {
+        let info = self.plane_layout("Border padding")?;
+        padded(info.w, left, right, "Border padding")?;
+        padded(info.h, top, bottom, "Border padding")?;
+        let raw = unsafe { sys::ncnn_mat_create() };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        unsafe {
+            sys::ncnn_copy_make_border(
+                self.raw,
+                raw,
+                native_extent(top, "Border padding")?,
+                native_extent(bottom, "Border padding")?,
+                native_extent(left, "Border padding")?,
+                native_extent(right, "Border padding")?,
+                mode as i32,
+                value,
+                std::ptr::null_mut(),
+            );
+            Self::owned(raw, self.f32_known)
+        }
+    }
+    /// Removes rows and columns from every plane.
+    ///
+    /// The crop runs on the native kernel and keeps the remaining storage layout, which is the
+    /// detection-side counterpart of [`copy_make_border`](Self::copy_make_border). Requirements
+    /// match that method, and the crop keeps at least one row and one column.
+    pub fn copy_cut_border(
+        &self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+    ) -> Result<Self> {
+        let info = self.plane_layout("Border crop")?;
+        if left.saturating_add(right) >= info.w as usize
+            || top.saturating_add(bottom) >= info.h as usize
+        {
+            return Err(Error::invalid(
+                "Border crop removes every row or column of the tensor",
+            ));
+        }
+        let raw = unsafe { sys::ncnn_mat_create() };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        unsafe {
+            sys::ncnn_copy_cut_border(
+                self.raw,
+                raw,
+                native_extent(top, "Border crop")?,
+                native_extent(bottom, "Border crop")?,
+                native_extent(left, "Border crop")?,
+                native_extent(right, "Border crop")?,
+                std::ptr::null_mut(),
+            );
+            Self::owned(raw, self.f32_known)
+        }
+    }
+    fn plane_layout(&self, operation: &str) -> Result<TensorInfo> {
+        let info = self.info();
+        if !(2..=3).contains(&info.dims) || info.elempack != 1 || info.n != 1 || info.c <= 0 {
+            return Err(Error::invalid(format!(
+                "{operation} needs a 2-D or 3-D unpacked single-batch tensor"
+            )));
+        }
+        Ok(info)
+    }
+    /// Copies a rectangle of interleaved pixels into a new tensor.
+    ///
+    /// `size` is the whole image, `stride` its row distance in bytes and `rect` is `(x, y, width,
+    /// height)` inside it. The native kernel reads only the rectangle, so a caller that already
+    /// holds a frame crops and converts in one pass.
+    pub fn from_pixels_roi(
+        data: &[u8],
+        format: PixelFormat,
+        size: (usize, usize),
+        stride: usize,
+        rect: (usize, usize, usize, usize),
+    ) -> Result<Self> {
+        let stride = checked_pixel_input(data, format, size, stride, "Pixel ROI")?;
+        let (x, y, width, height) = checked_rect(size, rect)?;
+        unsafe {
+            Self::owned(
+                sys::ncnn_mat_from_pixels_roi(
+                    data.as_ptr(),
+                    format as i32,
+                    size.0 as i32,
+                    size.1 as i32,
+                    stride,
+                    x,
+                    y,
+                    width,
+                    height,
+                    std::ptr::null_mut(),
+                ),
+                true,
+            )
+        }
+    }
+    /// Copies a rectangle of interleaved pixels into a tensor of another size.
+    ///
+    /// The crop and the bilinear resize run in one native pass, which is the detector
+    /// preprocessing path: no cropped intermediate is materialized. Arguments match
+    /// [`from_pixels_roi`](Self::from_pixels_roi), and `target` is the output size.
+    pub fn from_pixels_roi_resize(
+        data: &[u8],
+        format: PixelFormat,
+        size: (usize, usize),
+        stride: usize,
+        rect: (usize, usize, usize, usize),
+        target: (usize, usize),
+    ) -> Result<Self> {
+        let stride = checked_pixel_input(data, format, size, stride, "Pixel ROI resize")?;
+        let (x, y, width, height) = checked_rect(size, rect)?;
+        if target.0 == 0 || target.1 == 0 {
+            return Err(Error::invalid("The target size must be non-empty"));
+        }
+        unsafe {
+            Self::owned(
+                sys::ncnn_mat_from_pixels_roi_resize(
+                    data.as_ptr(),
+                    format as i32,
+                    size.0 as i32,
+                    size.1 as i32,
+                    stride,
+                    x,
+                    y,
+                    width,
+                    height,
+                    native_extent(target.0, "Pixel ROI resize")?,
+                    native_extent(target.1, "Pixel ROI resize")?,
+                    std::ptr::null_mut(),
+                ),
+                true,
+            )
         }
     }
     /// Copies interleaved pixels into a new tensor.

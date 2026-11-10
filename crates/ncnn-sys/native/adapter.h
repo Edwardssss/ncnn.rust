@@ -58,6 +58,14 @@ extern "C"
     ncnn_datareader_t ncnn_rs_reader_create(const unsigned char* data, size_t size);
     ncnn_modelbin_t ncnn_rs_modelbin_from_mats(const ncnn_mat_t* mats, int count);
     int ncnn_rs_reference_add(const float* a, const float* b, int count, float* out);
+    // Graph description of a loaded network. Names stay valid while the network is unchanged.
+    // `flags` carries bit 0 support_vulkan, 1 support_vulkan_packing, 2 support_packing,
+    // 3 support_fp16_storage, 4 support_bf16_storage, 5 one_blob_only, 6 support_inplace.
+    int ncnn_rs_net_layer_info(ncnn_net_t net, int index, const char** name, const char** type,
+                               int* typeindex, int* bottom_count, int* top_count, int* flags);
+    int ncnn_rs_net_blob_count(ncnn_net_t net);
+    int ncnn_rs_net_blob_info(ncnn_net_t net, int index, const char** name, int* dims,
+                              int* w, int* h, int* d, int* c, int* producer, int* consumer);
 #ifdef __cplusplus
 }
 #endif

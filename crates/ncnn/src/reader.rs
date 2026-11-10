@@ -7,9 +7,11 @@ pub struct DataReader {
     _thread: PhantomData<Rc<()>>,
 }
 impl DataReader {
-    /// Copies the buffer into a native reader that outlives it.
+    /// Copies the buffer into a native reader that outlives it and supports both
+    /// formatted scanning and raw reads, so parameter text and weight streams load
+    /// through the same handle.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let raw = unsafe { sys::ncnn_rs_reader_create(data.as_ptr(), data.len()) };
+        let raw = unsafe { sys::ncnn_rs_reader_memory(data.as_ptr(), data.len()) };
         if raw.is_null() {
             return Err(Error::Native(-100));
         }

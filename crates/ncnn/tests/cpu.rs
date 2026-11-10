@@ -447,9 +447,25 @@ fn cpu_contracts() -> ncnn::Result<()> {
     unsafe {
         let raw = reader.as_raw();
         let mut bytes = [0u8; 4];
-        assert_eq!((*raw).read.unwrap()(raw, bytes.as_mut_ptr().cast(), 4), 0);
-        assert_eq!((*raw).read.unwrap()(raw, bytes.as_mut_ptr().cast(), 3), 3);
+        assert_eq!(
+            (*raw).read.unwrap()(raw, bytes.as_mut_ptr().cast(), 4),
+            3,
+            "a read is clamped to the bytes that remain"
+        );
+        assert_eq!((*raw).read.unwrap()(raw, bytes.as_mut_ptr().cast(), 1), 0);
         assert_eq!(&bytes[..3], &[1, 2, 3]);
+        let text = ncnn::DataReader::from_bytes(b"12 34")?;
+        let mut number = 0i32;
+        assert_eq!(
+            (*text.as_raw()).scan.unwrap()(
+                text.as_raw(),
+                c"%d".as_ptr(),
+                (&mut number as *mut i32).cast()
+            ),
+            1,
+            "the reader scans parameter text"
+        );
+        assert_eq!(number, 12);
     }
     let destroyed = std::sync::atomic::AtomicUsize::new(0);
     {

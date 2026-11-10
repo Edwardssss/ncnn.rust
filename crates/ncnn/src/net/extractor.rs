@@ -188,6 +188,40 @@ impl Extractor<'_> {
         }
         Ok(())
     }
+    /// Submits a borrowed tensor without copying its storage.
+    ///
+    /// This is the zero-copy form of [`input`](Self::input): native input keeps a shallow handle,
+    /// so the tensor's buffer is read in place. The tensor must already hold unpacked FP32 storage.
+    ///
+    /// # Safety
+    ///
+    /// The tensor and the storage behind it must stay alive and unmodified until every extraction
+    /// that reads this input has finished and the extractor is dropped. [`input`](Self::input)
+    /// copies instead, which is why it is safe. [`Net::infer_borrowed`](crate::Net::infer_borrowed)
+    /// bounds the borrow to one request.
+    pub unsafe fn input_borrowed<'a>(
+        &mut self,
+        endpoint: impl Into<Endpoint<'a>>,
+        mat: &Mat,
+    ) -> Result<()> {
+        let target = self.resolve(endpoint.into(), false)?;
+        self.ensure_not_reserved()?;
+        let info = mat.info();
+        if !mat.f32_known || info.elemsize != 4 || info.elempack != 1 {
+            return Err(Error::invalid(
+                "A borrowed input needs unpacked FP32 storage",
+            ));
+        }
+        status_at(
+            "submit input",
+            match &target {
+                Target::Named(name) => sys::ncnn_extractor_input(self.raw, name.as_ptr(), mat.raw),
+                Target::Indexed(index) => {
+                    sys::ncnn_extractor_input_index(self.raw, *index, mat.raw)
+                }
+            },
+        )
+    }
     /// Borrows eligible CPU output through a scoped guard.
     ///
     /// The guard reserves the network for its lifetime, so no other extractor starts and no input

@@ -629,3 +629,72 @@ extern "C" int ncnn_rs_reference_add(const float* a, const float* b, int count, 
     }
     NCNN_RS_CATCH
 }
+
+// Graph description. The name pointers refer to strings owned by the network, so they stay valid
+// until the network changes; callers copy what they need.
+extern "C" int ncnn_rs_net_layer_info(ncnn_net_t net, int index, const char** name, const char** type,
+                                      int* typeindex, int* bottom_count, int* top_count, int* flags)
+{
+    NCNN_RS_TRY
+    {
+        if (!net || !name || !type || !typeindex || !bottom_count || !top_count || !flags)
+            return -1;
+        const std::vector<ncnn::Layer*>& layers = ((ncnn::Net*)net->pthis)->layers();
+        if (index < 0 || (size_t)index >= layers.size())
+            return -1;
+        const ncnn::Layer* layer = layers[(size_t)index];
+        if (!layer)
+            return -1;
+        *name = layer->name.c_str();
+        *type = layer->type.c_str();
+        *typeindex = layer->typeindex;
+        *bottom_count = (int)layer->bottoms.size();
+        *top_count = (int)layer->tops.size();
+        int bits = 0;
+        if (layer->support_vulkan) bits |= 1 << 0;
+        if (layer->support_vulkan_packing) bits |= 1 << 1;
+        if (layer->support_packing) bits |= 1 << 2;
+        if (layer->support_fp16_storage) bits |= 1 << 3;
+        if (layer->support_bf16_storage) bits |= 1 << 4;
+        if (layer->one_blob_only) bits |= 1 << 5;
+        if (layer->support_inplace) bits |= 1 << 6;
+        *flags = bits;
+        return 0;
+    }
+    NCNN_RS_CATCH
+}
+
+extern "C" int ncnn_rs_net_blob_count(ncnn_net_t net)
+{
+    NCNN_RS_TRY
+    {
+        if (!net)
+            return -1;
+        return (int)((ncnn::Net*)net->pthis)->blobs().size();
+    }
+    NCNN_RS_CATCH
+}
+
+extern "C" int ncnn_rs_net_blob_info(ncnn_net_t net, int index, const char** name, int* dims,
+                                     int* w, int* h, int* d, int* c, int* producer, int* consumer)
+{
+    NCNN_RS_TRY
+    {
+        if (!net || !name || !dims || !w || !h || !d || !c || !producer || !consumer)
+            return -1;
+        const std::vector<ncnn::Blob>& blobs = ((ncnn::Net*)net->pthis)->blobs();
+        if (index < 0 || (size_t)index >= blobs.size())
+            return -1;
+        const ncnn::Blob& blob = blobs[(size_t)index];
+        *name = blob.name.c_str();
+        *dims = blob.shape.dims;
+        *w = blob.shape.dims ? blob.shape.w : 0;
+        *h = blob.shape.dims ? blob.shape.h : 0;
+        *d = blob.shape.dims ? blob.shape.d : 0;
+        *c = blob.shape.dims ? blob.shape.c : 0;
+        *producer = blob.producer;
+        *consumer = blob.consumer;
+        return 0;
+    }
+    NCNN_RS_CATCH
+}

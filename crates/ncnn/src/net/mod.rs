@@ -2,10 +2,12 @@
 
 mod blob;
 mod extractor;
+mod graph;
 mod output;
 
 pub use blob::{BlobId, Endpoint};
 pub use extractor::{Extractor, OutputGuard};
+pub use graph::{BlobInfo, LayerInfo};
 pub use output::{FinalOutput, OutputRange};
 
 use crate::{
@@ -507,6 +509,115 @@ impl Net {
             }
         }
         Err(Error::invalid("Unknown graph input or output"))
+    }
+    /// Returns the effective value of one option on this network.
+    ///
+    /// The read comes from the native option block the net actually uses, so it reflects what ncnn
+    /// applied rather than what a builder requested.
+    pub fn option(&self, key: crate::CpuOption) -> Result<i32> {
+        let option = unsafe { sys::ncnn_net_get_option(self.raw) };
+        let mut value = 0;
+        unsafe { status(sys::ncnn_rs_option_get(option, key as i32, &mut value))? };
+        Ok(value)
+    }
+    /// Runs one request over borrowed FP32 inputs without copying them.
+    ///
+    /// Each entry is the input name, the values in channel-plane order and the shape. The borrows
+    /// cover the whole request, which is what makes the zero-copy input path safe; outputs are
+    /// independent values as in [`infer`](Self::infer). This is the form to use when frames already
+    /// sit in caller memory.
+    pub fn infer_borrowed(
+        &self,
+        inputs: &[(&str, &[f32], &[usize])],
+        outputs: &[&str],
+    ) -> Result<Vec<FinalOutput>> {
+        let mut extractor = self.extractor()?;
+        let mut tensors = Vec::with_capacity(inputs.len());
+        for (_, values, dimensions) in inputs {
+            // SAFETY: `values` outlives this function, and neither the tensor nor the extractor
+            // leaves it, so every native read happens inside the borrow.
+            tensors.push(unsafe { Mat::from_external(values, dimensions)? });
+        }
+        for ((name, _, _), tensor) in inputs.iter().zip(&tensors) {
+            // SAFETY: `tensors` keeps the borrowed storage reachable until the extractions below
+            // finish, and the extractor does not outlive them.
+            unsafe { extractor.input_borrowed(*name, tensor)? };
+        }
+        let mut collected = Vec::with_capacity(outputs.len());
+        for name in outputs {
+            collected.push(extractor.extract_owned(*name)?);
+        }
+        Ok(collected)
+    }
+    /// Loads text parameters through a data reader.
+    ///
+    /// The reader lets an application load from an archive or an embedded asset without arranging a
+    /// whole file. The native parser reads it sequentially, so weights need a second reader.
+    pub fn load_param_reader(&mut self, reader: &crate::DataReader) -> Result<()> {
+        self.clear();
+        let result = unsafe {
+            status_at(
+                "load parameters",
+                sys::ncnn_net_load_param_datareader(self.raw, reader.as_raw()),
+            )
+        };
+        self.loaded = result.is_ok();
+        if result.is_err() {
+            self.clear();
+        }
+        result
+    }
+    /// Loads weights through a data reader.
+    ///
+    /// Requirements match [`load_model`](Self::load_model): parameters load first, and the reader
+    /// has to start at the weights block because the native parser reads it sequentially.
+    pub fn load_model_reader(&mut self, reader: &crate::DataReader) -> Result<()> {
+        if !self.loaded || self.ready {
+            return Err(Error::invalid(
+                "Load parameters before loading weights once",
+            ));
+        }
+        let result = unsafe {
+            status_at(
+                "load weights",
+                sys::ncnn_net_load_model_datareader(self.raw, reader.as_raw()),
+            )
+        };
+        self.ready = result.is_ok();
+        if result.is_err() {
+            self.clear();
+        }
+        result
+    }
+    /// Registers a native custom-layer factory for a layer type index.
+    ///
+    /// Models produced by custom-layer tooling can carry the index instead of the type name, and
+    /// ncnn resolves those through this table. Registration must happen before parameters load, and
+    /// ncnn records the factory without validating the index: a model that requests the index
+    /// builds the layer, and no other model is affected.
+    ///
+    /// # Safety
+    ///
+    /// The creator must return a layer whose layout matches the index it is registered for, and
+    /// both callbacks keep the native lifecycle rules that
+    /// [`register_custom_layer`](Self::register_custom_layer) documents.
+    pub unsafe fn register_custom_layer_by_typeindex(
+        &mut self,
+        typeindex: i32,
+        creator: sys::ncnn_layer_creator_t,
+        destroyer: sys::ncnn_layer_destroyer_t,
+        userdata: *mut std::ffi::c_void,
+    ) -> Result<()> {
+        if self.loaded || creator.is_none() || destroyer.is_none() {
+            return Err(Error::invalid(
+                "Register complete factories before loading parameters",
+            ));
+        }
+        self.guard.low_copy.set(false);
+        sys::ncnn_net_register_custom_layer_by_typeindex(
+            self.raw, typeindex, creator, destroyer, userdata,
+        );
+        Ok(())
     }
     /// Returns the input blob names in graph order.
     ///
