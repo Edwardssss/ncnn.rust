@@ -30,6 +30,13 @@ fn request(
     output_id: &ncnn::BlobId,
     reusable: &mut Vec<f32>,
 ) -> ncnn::Result<f32> {
+    // Borrowed input and reused output: the fused zero-copy request path.
+    if mode == "borrowed-reused" {
+        let ranges =
+            net.infer_borrowed_into(&[("input", values, &[values.len()])], &["output"], reusable)?;
+        let slice = &reusable[ranges[0].values.clone()];
+        return Ok(black_box(slice[0] + slice[slice.len() - 1]));
+    }
     let input = Mat::from_f32(values, &[values.len()])?;
     let mut ex = net.extractor()?;
     if matches!(mode, "resolved" | "resolved-reused") {
@@ -88,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "index"
             | "resolved"
             | "resolved-reused"
+            | "borrowed-reused"
             | "gpu-transfer"
             | "gpu-resident"
             | "preprocess"
@@ -120,13 +128,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "native-request" {
         return native_request(iterations, elements);
     }
-    let net = Net::builder()?
-        .threads(1)?
-        .option(CpuOption::LightMode, 1)?
-        .load_bytes(
-            "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
-            &[],
-        )?;
+    // A borrowed input needs light mode off, so the modes that borrow keep the native default.
+    let builder = Net::builder()?.threads(1)?;
+    let builder = if mode.starts_with("borrowed") {
+        builder
+    } else {
+        builder.option(CpuOption::LightMode, 1)?
+    };
+    let net = builder.load_bytes(
+        "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+        &[],
+    )?;
     let input_id = net.resolve_blob("input")?;
     let output_id = net.resolve_blob("output")?;
     let values = vec![1f32; elements];
