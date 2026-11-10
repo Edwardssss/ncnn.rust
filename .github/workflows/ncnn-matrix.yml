@@ -45,7 +45,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake clang libclang-dev
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
 
       - name: Cache SDK
         uses: actions/cache@v6
@@ -65,6 +67,13 @@ jobs:
       # The adapter is written against one release, so an older SDK cannot link it. Those rows
       # report which declarations the pinned header needs that the build lacks, which is the
       # compatibility statement for that release.
+      - name: Fetch the pinned header
+        if: matrix.version != needs.resolve.outputs.pinned
+        run: |
+          mkdir -p vendor/pinned
+          curl -fsSL "https://raw.githubusercontent.com/Tencent/ncnn/${{ needs.resolve.outputs.pinned }}/src/c_api.h" \
+            -o vendor/pinned/c_api.h
+
       - name: Report the declaration gap
         if: matrix.version != needs.resolve.outputs.pinned
         env:
@@ -73,7 +82,7 @@ jobs:
           {
             echo "### ncnn ${{ matrix.version }}"
             echo '```'
-            python3 tools/compat-gap.py --sdk "$NCNN_INSTALL_DIR"
+            python3 tools/compat-gap.py --sdk "$NCNN_INSTALL_DIR" --baseline vendor/pinned/c_api.h
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

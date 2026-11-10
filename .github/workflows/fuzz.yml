@@ -47,7 +47,9 @@ jobs:
       - name: Run the parser target
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo fuzz run param_parse --fuzz-dir fuzz -- -max_total_time=120 -rss_limit_mb=4096
+        # `rust-toolchain.toml` pins stable, which rustup prefers over the installed default, so
+        # the sanitizer flags need the toolchain named on the command.
+        run: cargo +nightly fuzz run param_parse --fuzz-dir fuzz -- -max_total_time=120 -rss_limit_mb=4096
 
       - name: Keep the corpus
         if: always()
