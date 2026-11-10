@@ -173,6 +173,51 @@ fn owned_tensors_support_fill_and_in_place_normalization() {
 
     let copied = tensor.normalized(&[0.5, 0.5], &[2., 2.]).unwrap();
     assert_eq!(copied.to_f32().unwrap()[..3], [0., 0., 0.]);
+
+    // Every coefficient combination agrees between the copying and the in-place form, and the
+    // conversion is the native scale-and-bias arithmetic.
+    let values = [1.0f32, -2.0, 3.5, -4.25, 5.0, -6.75];
+    let source = Mat::from_f32(&values, &[3, 1, 2]).unwrap();
+    for (mean, norm) in [
+        (&[0.5f32, -1.0][..], &[2.0f32, 4.0][..]),
+        (&[0.5f32, -1.0][..], &[][..]),
+        (&[][..], &[2.0f32, 0.5][..]),
+        (&[][..], &[][..]),
+    ] {
+        let expected: Vec<f32> = values
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| {
+                let channel = index / 3;
+                let scaled = if norm.is_empty() {
+                    value
+                } else {
+                    value * norm[channel]
+                };
+                if mean.is_empty() {
+                    scaled
+                } else {
+                    scaled - mean[channel] * norm.get(channel).copied().unwrap_or(1.0)
+                }
+            })
+            .collect();
+        let copying = source.normalized(mean, norm).unwrap().to_f32().unwrap();
+        let mut in_place = source.deep_clone().unwrap();
+        in_place.normalize_in_place(mean, norm).unwrap();
+        let in_place = in_place.to_f32().unwrap();
+        for (index, &native) in expected.iter().enumerate() {
+            assert!(
+                (copying[index] - native).abs() <= 1e-6,
+                "copying [{index}]: {} != {native}",
+                copying[index]
+            );
+            assert!(
+                (in_place[index] - native).abs() <= 1e-6,
+                "in-place [{index}]: {} != {native}",
+                in_place[index]
+            );
+        }
+    }
     let _ = tensor;
 }
 

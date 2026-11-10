@@ -260,16 +260,54 @@ extern "C" int ncnn_rs_mat_normalized(ncnn_mat_t mat, const float* mean, const f
 {
     NCNN_RS_TRY
     {
-        ncnn::Mat copy = ((ncnn::Mat*)mat)->clone();
-        if (copy.empty())
+        if (!mat || !out)
+            return -1;
+        const ncnn::Mat& m = *(const ncnn::Mat*)mat;
+        if (m.elemsize != 4 || m.elempack != 1 || m.n != 1 || m.c <= 0 || m.dims < 1)
+            return -1;
+        ncnn::Mat dst;
+        if (m.dims == 1)
+            dst.create(m.w, (size_t)4u, 1);
+        if (m.dims == 2)
+            dst.create(m.w, m.h, (size_t)4u, 1);
+        if (m.dims == 3)
+            dst.create(m.w, m.h, m.c, (size_t)4u, 1);
+        if (m.dims == 4)
+            dst.create(m.w, m.h, m.d, m.c, (size_t)4u, 1);
+        if (dst.empty())
             return -100;
-        // Scale interprets dimensions below three as element/row coefficients.
-        // A header-only channel view preserves the public per-channel contract.
-        ncnn::Mat channels = copy;
-        if (channels.dims < 3)
-            channels.dims = 3;
-        channels.substract_mean_normalize(mean, norm);
-        *out = (ncnn_mat_t) new ncnn::Mat(copy);
+        const size_t plane = (size_t)m.w * m.h * m.d;
+        // One pass over the fresh storage instead of a copy followed by a native layer, which is
+        // the same scale and bias the native Scale path applies.
+        for (int q = 0; q < m.c; q++)
+        {
+            const float* src = m.channel(q);
+            float* dst_ptr = dst.channel(q);
+            if (mean && norm)
+            {
+                const float scale = norm[q];
+                const float offset = -mean[q] * norm[q];
+                for (size_t i = 0; i < plane; i++)
+                    dst_ptr[i] = src[i] * scale + offset;
+            }
+            else if (norm)
+            {
+                const float scale = norm[q];
+                for (size_t i = 0; i < plane; i++)
+                    dst_ptr[i] = src[i] * scale;
+            }
+            else if (mean)
+            {
+                const float offset = -mean[q];
+                for (size_t i = 0; i < plane; i++)
+                    dst_ptr[i] = src[i] + offset;
+            }
+            else
+            {
+                memcpy(dst_ptr, src, plane * sizeof(float));
+            }
+        }
+        *out = (ncnn_mat_t) new ncnn::Mat(dst);
         return 0;
     }
     NCNN_RS_CATCH
@@ -281,11 +319,32 @@ extern "C" int ncnn_rs_mat_normalize_in_place(ncnn_mat_t mat, const float* mean,
         if (!mat)
             return -1;
         ncnn::Mat& m = *(ncnn::Mat*)mat;
-        // Same per-channel view as ncnn_rs_mat_normalized, applied to the caller's storage.
-        ncnn::Mat channels = m;
-        if (channels.dims < 3)
-            channels.dims = 3;
-        channels.substract_mean_normalize(mean, norm);
+        if (m.elemsize != 4 || m.elempack != 1 || m.n != 1 || m.c <= 0 || m.dims < 1)
+            return -1;
+        const size_t plane = (size_t)m.w * m.h * m.d;
+        for (int q = 0; q < m.c; q++)
+        {
+            float* data = m.channel(q);
+            if (mean && norm)
+            {
+                const float scale = norm[q];
+                const float offset = -mean[q] * norm[q];
+                for (size_t i = 0; i < plane; i++)
+                    data[i] = data[i] * scale + offset;
+            }
+            else if (norm)
+            {
+                const float scale = norm[q];
+                for (size_t i = 0; i < plane; i++)
+                    data[i] *= scale;
+            }
+            else if (mean)
+            {
+                const float offset = -mean[q];
+                for (size_t i = 0; i < plane; i++)
+                    data[i] += offset;
+            }
+        }
         return 0;
     }
     NCNN_RS_CATCH
