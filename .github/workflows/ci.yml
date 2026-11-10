@@ -106,6 +106,7 @@ jobs:
           cargo run -p ncnn-rust --example add
           cargo run -p ncnn-rust --example typed_tensors
           cargo run -p ncnn-rust --example api_benchmark -- preprocess 50 4096
+          cargo run -p ncnn-rust --example api_benchmark -- native-request 50 4096
 
       # A second pass catches state that only breaks after the first one.
       - name: Repeat the suite
