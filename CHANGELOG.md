@@ -113,6 +113,9 @@ library upgrade is a minor change of this crate.
   thread, so a GPU run touches one native device path whatever the test thread count. The
   troubleshooting page records the Windows abort that no wrapper call can report, with the memory and
   concurrency measurements that ruled out the wrapper as its cause.
+- The evidence history records the standalone C++ reproduction of the light-mode defect that
+  `Extractor::input_borrowed` rejects, on Windows and Linux, together with the upstream issue and the
+  proposed fix.
 
 ## 0.2.0 - 2026-11-10
 

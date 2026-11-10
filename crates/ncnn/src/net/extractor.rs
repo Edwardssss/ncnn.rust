@@ -193,7 +193,10 @@ impl Extractor<'_> {
     /// This is the zero-copy form of [`input`](Self::input): native input keeps a shallow handle,
     /// so the tensor's buffer is read in place. The tensor must already hold unpacked FP32 storage,
     /// and the network must run without light mode, because the native forward path reads a storage
-    /// refcount that an external tensor does not carry.
+    /// refcount that an external tensor does not carry. Upstream tracks that defect as
+    /// [Tencent/ncnn#1543](https://github.com/Tencent/ncnn/issues/1543) and has a fix under review in
+    /// [Tencent/ncnn#7270](https://github.com/Tencent/ncnn/pull/7270); the rejection here can be
+    /// relaxed once a release carries it.
     ///
     /// # Safety
     ///

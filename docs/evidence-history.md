@@ -47,6 +47,24 @@ vulkan` passed the 52 conformance cases, the four Vulkan contracts, the heap ret
 example printed the device line, `[5.0, 7.0, 9.0]` from a resident upload, and the pool allocator as
 32 bytes live against a 48-byte high-water mark.
 
+## Upstream light-mode defect
+
+The rejection that `Extractor::input_borrowed` applies to light mode guards a native defect. Recorded
+on 2026-11-10 against ncnn master `14fb7ed7` with a standalone C++ program, no Rust involved: a
+two-layer `Input -> ReLU` graph of 64x64x3 FP32, light mode at its native default, and the input built
+as `ncnn::Mat(w, h, c, pixels.data(), sizeof(float))`.
+
+| Host | Before | After the null-refcount guard |
+|---|---|---|
+| Windows x64, MSVC 14.50, release, static CPU library | exit code `0xC0000005` inside extract | all four input/light-mode combinations extract, `caller_kept=1` |
+| Linux x86-64, GCC 14.2, release, `NCNN_VULKAN=OFF` | `SIGSEGV`, exit code 139, `NetPrivate::do_forward_layer -> NetPrivate::forward_layer -> Extractor::extract` | the same four combinations pass |
+
+Upstream tracks the defect as [Tencent/ncnn#1543](https://github.com/Tencent/ncnn/issues/1543) and the
+proposed fix is [Tencent/ncnn#7270](https://github.com/Tencent/ncnn/pull/7270), which treats a missing
+refcount as shared storage so the in-place layer clones instead of writing through the caller
+buffer. test_relu, test_absval, test_convolution and test_packing pass on the patched tree under
+Linux x86-64.
+
 ## Pooled request paths
 
 `api_benchmark pooled-request 200 65536` on the WSL2 guest and on the Windows host, five rotated
