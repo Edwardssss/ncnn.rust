@@ -23,6 +23,10 @@ library upgrade is a minor change of this crate.
   passing matrix run comments on the open tracking issue and closes it.
 - Both CPU examples and both device examples run in CI, and rustdoc builds with `-D warnings` on
   every push instead of only during the documentation deploy.
+- The README drops its validation section and gains single-layer and preprocessing tables next to
+  the trained-model table; the CI description stays in `docs/support-matrix.md`.
+- The `Net`, `NetBuilder`, `Extractor`, `OutputGuard`, `Mat` view, `gpu` and `CpuOption` items state
+  their preconditions, error cases and layout requirements instead of one summary line.
 - A probe test prints the finiteness of three attention configurations. The `ubuntu-24.04-arm`
   runner matches x86-64 for the two-dimensional operand, while a three-dimensional operand with one
   channel returns `NaN` for one sequence row there, so the layer case uses the two-dimensional form

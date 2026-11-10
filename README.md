@@ -110,8 +110,9 @@ let bytes: Vec<i8> = stored.to_i8()?;
 
 ## Performance
 
-Wrapper cost is measured against the native C API from the same SDK in one process, so the table
-isolates the binding rather than the engine. Median milliseconds per request, one thread:
+Wrapper cost is measured against the native C API from the same SDK in one process, so the tables
+isolate the binding rather than the engine. Median milliseconds per request, one thread, release
+build:
 
 | Model | Device | native | ncnn-rust | Delta |
 |---|---|---:|---:|---:|
@@ -120,29 +121,32 @@ isolates the binding rather than the engine. Median milliseconds per request, on
 | NanoDet-m, 6 outputs | Vulkan | 4.489 | 4.702 | +4.7% |
 | PP-OCRv5 recognition | Vulkan | 10.863 | 10.210 | within spread |
 
-The `ncnn-rust` column resolves endpoints once and reuses a caller vector, which allocates nothing
-after warm-up. Returning an owned vector per request instead costs one output copy: NanoDet's six
-outputs of 235,200 values add 18% on Vulkan. Single-layer graphs stay at native timing (0.002 ms
-for ReLU and AbsVal on CPU). Method and full tables: [Performance](docs/performance.md).
+The `ncnn-rust` column resolves endpoints once and fills a caller vector, which allocates nothing
+after warm-up. Returning an owned vector per request instead adds one output copy: 5.294 ms against
+4.702 ms on NanoDet Vulkan (+13%), whose six outputs total 235,200 values. The CPU figures move
+within the run-to-run spread, which the method section sets at 10%.
 
-## Validation
+A single-layer graph shows the same picture at microsecond scale, where the request path rather than
+the arithmetic dominates:
 
-CI builds ncnn from source on Linux x86-64, Linux ARM64, Windows, macOS x86-64 and macOS Apple
-Silicon, then runs formatting, Clippy, the workspace tests, the examples, a rustdoc build with
-warnings denied, a publish dry run for both packages and a build of a separate crate that depends on
-the packaged archives.
-Separate jobs check the declared minimum Rust version and run the Vulkan contracts against the
-Mesa lavapipe software device, compare the public API with the published release, and resolve every
-documentation link and anchor without network access. The contracts cover device selection, allocator accounting,
-resident inference, guard descriptors, external buffer import, pipeline caches and cross-device
-rejection, and the same device repeats the whole conformance suite. A coverage job reports line
-coverage of the wrapper, and a nightly workflow fuzzes the text parameter loader and the bounded
-weight reader. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pinned release plus
-the two newest tags, runs the full suite and the native C++ model comparison on the pinned one, and
-reports the C API declarations the older builds lack. `cargo test` covers the
-in-repo conformance suite: operator families compared against Rust reference loops, one inference
-per layer type among the 108 the SDK ships, the public API paths that the families do not reach,
-and a zero-allocation steady-state gate. No external model files are needed.
+| Case | Device | native | ncnn-rust |
+|---|---|---:|---:|
+| ReLU | CPU | 0.002 ms | 0.002 ms |
+| AbsVal | CPU | 0.002 ms | 0.002 ms |
+| ReLU | Vulkan | 0.193 ms | 0.197 ms |
+| AbsVal | Vulkan | 0.183 ms | 0.221 ms |
+
+Preprocessing and tensor lifecycle, median microseconds:
+
+| Operation | native | ncnn-rust |
+|---|---:|---:|
+| create and copy | 6.022 | 7.043 |
+| RGB conversion | 75.769 | 79.125 |
+| clone and normalize | 12.958 | 28.366 |
+
+Normalization and reshape return independent storage here, where the native entry mutates or shares
+it, which accounts for that row. The method, the full tables and the reproduction commands are in
+[Performance](docs/performance.md).
 
 ## Documentation
 
