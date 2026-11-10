@@ -64,6 +64,23 @@ library upgrade is a minor change of this crate.
   `BorderMode` argument.
 - `Net::load_param_reader` and `Net::load_model_reader` load from a `DataReader`, and
   `register_custom_layer_by_typeindex` registers a factory for a type index.
+- `Extractor::clear` restarts a handle so the next request starts from an empty cache,
+  `Extractor::continue_session` keeps the cached state for the next input, which is what
+  token-by-token decoding needs, and
+  `Extractor::{set_light_mode, set_blob_allocator, set_workspace_allocator, set_kvcache_allocator,
+  set_kvcache_max_seqlen_hint}` override the network options for one request path. A restart
+  re-applies them, so a reused handle keeps the settings it was given.
+- `Mat::{channel, channel_range, depth, depth_range, column_range, row_range, batch, batch_range}`
+  return a `MatView`, a read-only alias of part of the tensor that copies only when it goes back in
+  as an input. `Mat::is_empty` reports a tensor without storage, and `TensorInfo::total` and
+  `TensorInfo::shape` report the native storage slots and the extent of each axis.
+- `Net::layer_handle` exposes the native layer the loaded graph holds at an index for advanced C API
+  calls, next to the `Net::layers` description of the same layer.
+- `crates/ncnn/examples/threads.rs` runs one network per worker thread and reports the aggregate
+  throughput next to a single network that uses every core.
+- The nightly fuzz workflow also fuzzes the pixel view and the typed tensor paths, so the buffer
+  checks, region arithmetic, element decoding and reshape validation are covered next to the model
+  loaders.
 - CI compares the public API with the published release, resolves every documentation link and
   anchor offline, and a `v*` tag publishes both packages in dependency order before creating the
   GitHub release from the changelog section.
@@ -116,6 +133,15 @@ library upgrade is a minor change of this crate.
 - The evidence history records the standalone C++ reproduction of the light-mode defect that
   `Extractor::input_borrowed` rejects, on Windows and Linux, together with the upstream issue and the
   proposed fix.
+- `Extractor::input` and `Extractor::input_borrowed` restart the native handle once a request
+  extracted, so one extractor answers a second request instead of returning the blobs the first one
+  cached. The restart recreates the handle, because ncnn's `Extractor::clear` empties the blob table
+  and leaves the handle unable to accept input, and it re-applies the per-extractor settings.
+  `Extractor::continue_session` opts the next input out of that restart, which keeps a key/value
+  cache across inputs.
+- `Extractor::set_light_mode` documents the graphs light mode cannot run: ncnn releases a bottom blob
+  after its first consumer, so a blob that feeds several layers (a residual connection, or an input
+  consumed twice) needs light mode off.
 
 ## 0.2.0 - 2026-11-10
 

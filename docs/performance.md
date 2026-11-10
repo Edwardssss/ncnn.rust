@@ -112,6 +112,12 @@ measurement of a 256 KB `Vec` copy on the same host reported 77 to 108 us, the s
 inference, so the owned-output form is dominated by allocator and memory behaviour rather than by the
 wrapper.
 
+A handle from `Net::extractor` restarts itself once a request extracted, because the native
+extractor caches the blobs it produced and would otherwise answer the next request from that cache.
+The restart costs one native extractor construction, which stays inside the run-to-run spread of the
+figures below; a caller that builds one handle per request never pays it, because a fresh handle has
+nothing to restart.
+
 ## Reusing native memory
 
 The network allocates its intermediate tensors per request, and on a heap that returns freed memory
@@ -123,21 +129,45 @@ and reporting medians; 65536 elements, one thread, one run of the mode per host:
 
 | Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
 |---|---:|---:|---:|---:|
-| `guard` (borrowed output) | 27546 ns | 18308 ns | 104975 ns | 33679 ns |
-| `extract_owned` (owned output) | 251569 ns | 24375 ns | 225228 ns | 112721 ns |
-| `infer_into` (owned input, reused buffer) | 32288 ns | 25400 ns | 104164 ns | 40784 ns |
-| `infer_borrowed_into` (borrowed input and buffer) | 24718 ns | 17602 ns | 43721 ns | 19169 ns |
+| `guard` (borrowed output) | 23731 ns | 16724 ns | 154280 ns | 37474 ns |
+| `extract_owned` (owned output) | 227135 ns | 23157 ns | 332489 ns | 147012 ns |
+| `infer_into` (owned input, reused buffer) | 31041 ns | 22960 ns | 155006 ns | 48503 ns |
+| `infer_borrowed_into` (borrowed input and buffer) | 22768 ns | 16911 ns | 40910 ns | 18978 ns |
 
 The owned form gains most because it was the form that allocated: about ten times on the glibc guest
-and about two to three times on the Windows host, whose heap serves the same pattern more cheaply.
-The pooled figures agree across hosts to within the spread that the hosts show on their own, which
-is what a request path bound by the engine rather than by the allocator looks like. The pools keep
-the blocks they served for as long as the network lives, so the retained set grows by the working
-set of one request and drops with the network.
+and two to four times on the Windows host, whose heap serves the same pattern more cheaply, and the
+Windows figures move between runs with the load of the host. The pooled forms land within a factor of
+two of each other on the glibc guest, which is what a request path bound by the engine rather than by
+the allocator looks like; the Windows host stays above them because each request still copies its
+output through that heap. The pools keep the blocks they served for as long as the network lives, so
+the retained set grows by the working set of one request and drops with the network.
 
 `heap::retain_pages` addresses the other half: the pages of a buffer the caller allocates. A pooled
 network does not remove that buffer, and a network without pools still allocates its tensors, so the
 two settings are independent.
+
+## Threads and workers
+
+A network and its extractor are single-threaded: both borrow their owning thread, so a service
+scales by giving each worker its own pair. `crates/ncnn/examples/threads.rs` builds that pair inside
+every worker and sets the native thread count to one, then times a single network that uses every
+core on the same graph. 65536 elements, one ReLU layer; the Windows figures are three runs of one
+configuration each, the WSL2 figures one run:
+
+| Mode | Windows, 16 cores | WSL2 glibc, 8 cores |
+|---|---:|---:|
+| one network, every core, 1 worker | 192 to 221 us per request | 108 us per request |
+| one network per worker, 1 worker | 147 to 188 us per request | 38 us per request |
+| one network per worker, 2 workers | 95 to 101 us per request | 27 us per request |
+| one network per worker, 4 workers | 44 to 57 us per request | 9 us per request |
+
+The native thread pool returns little on a graph this small, because each request dispatches over
+the pool and waits: one worker that spreads the request over every core lands within a small factor
+of one worker on one thread. Independent workers then scale within the core budget, and four workers
+reach two to four times the aggregate throughput of one. A graph whose layers are heavy enough to
+amortize the dispatch cost moves the other way, so the choice is a measurement rather than a rule;
+the example prints both forms for the graph an application uses. The host load moves these figures
+between runs, which is why the table gives the spread instead of a single median.
 
 ## Allocator choice
 

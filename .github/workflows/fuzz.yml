@@ -17,7 +17,7 @@ env:
 
 jobs:
   fuzz:
-    name: Fuzz the model loaders
+    name: Fuzz the loaders and tensor paths
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -44,12 +44,15 @@ jobs:
           python3 tools/fetch-ncnn.py
           python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
 
-      - name: Run the parser target
+      - name: Run the fuzz targets
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         # `rust-toolchain.toml` pins stable, which rustup prefers over the installed default, so
         # the sanitizer flags need the toolchain named on the command.
-        run: cargo +nightly fuzz run param_parse --fuzz-dir fuzz -- -max_total_time=120 -rss_limit_mb=4096
+        run: |
+          for target in param_parse pixels typed_tensor; do
+            cargo +nightly fuzz run "$target" --fuzz-dir fuzz -- -max_total_time=120 -rss_limit_mb=4096
+          done
 
       - name: Keep the corpus
         if: always()

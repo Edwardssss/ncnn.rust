@@ -18,4 +18,18 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "pixels"
+path = "fuzz_targets/pixels.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed_tensor"
+path = "fuzz_targets/typed_tensor.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

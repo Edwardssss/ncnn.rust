@@ -92,6 +92,25 @@ let bytes: Vec<i8> = stored.to_i8()?;
 
 `Mat::from_typed` 与 `Mat::from_i8` 为输入侧构建同样的存储，`Extractor::extract_stored` 在单个 extractor 生命周期内借用它。[类型化张量示例](crates/ncnn/examples/typed_tensors.rs)与[常驻 Vulkan 示例](crates/ncnn/examples/vulkan_resident.rs)可端到端运行。
 
+extractor 可以安全复用：提交输入会重启本次请求，因此第二次推理会重新计算，而不是返回上一次缓存的结果。逐 extractor 的设置覆盖网络选项之外的部分，并在该重启后保留：
+
+```rust
+let mut ex = net.extractor()?;
+ex.set_light_mode(false);
+ex.set_kvcache_max_seqlen_hint(2048)?;
+```
+
+跨输入保留状态的图（例如逐 token 解码时的注意力缓存）在下一个输入前调用 `ex.continue_session()`，该输入便延续缓存状态而不重启请求。
+
+张量的一部分可以直接读取而不复制。视图别名源存储，只在读取或作为输入提交时才复制：
+
+```rust
+let plane = output.channel(0)?;
+let values = plane.to_f32()?;
+```
+
+网络与 extractor 留在创建它们的线程上，因此服务端为每个工作线程准备一对；[多线程示例](crates/ncnn/examples/threads.rs)对比了它与"单个网络用满所有核心"两种形式。
+
 ## 性能
 
 封装开销在同一进程内针对同一 SDK 的原生 C API 测量，因此表中反映的是绑定层而非推理引擎。每请求毫秒中位数，单线程，release 构建：

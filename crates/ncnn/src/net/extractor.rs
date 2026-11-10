@@ -12,10 +12,29 @@ use std::{cell::Cell, ffi::CString, marker::PhantomData};
 ///
 /// An extractor borrows its network, so it stays on the thread that created both. A worker thread
 /// builds its own network and extractor instead of sharing them.
+///
+/// # Reuse
+///
+/// The native extractor caches the blobs a request produced, so submitting a second input to the
+/// same handle would answer from that cache. [`input`](Self::input) therefore restarts the handle
+/// first, which makes one extractor safe to reuse: the second extraction recomputes instead of
+/// returning the first answer. A restart creates a new native handle, because ncnn's
+/// `Extractor::clear` empties the blob table and leaves the handle unable to accept input; the
+/// per-request settings below are re-applied to the new handle. [`clear`](Self::clear) performs the
+/// restart explicitly, and [`continue_session`](Self::continue_session) keeps the cache for the next
+/// input, which is what token-by-token decoding needs.
 pub struct Extractor<'net> {
     pub(crate) raw: sys::ncnn_extractor_t,
     pub(crate) _net: &'net Net,
     pub(crate) low_copy: Cell<bool>,
+    pub(crate) extracted: Cell<bool>,
+    pub(crate) continuation: Cell<bool>,
+    pub(crate) light_mode: Option<bool>,
+    pub(crate) net_light_mode: bool,
+    pub(crate) blob_allocator: Option<sys::ncnn_allocator_t>,
+    pub(crate) workspace_allocator: Option<sys::ncnn_allocator_t>,
+    pub(crate) kvcache_allocator: Option<sys::ncnn_allocator_t>,
+    pub(crate) kvcache_hint: Option<i32>,
 }
 
 enum Target {
@@ -104,6 +123,131 @@ impl Extractor<'_> {
         }
         Ok(())
     }
+    /// Restarts this handle so the next request starts from an empty cache.
+    ///
+    /// The handle stays usable: a restart creates a new native extractor and re-applies the
+    /// per-request settings. [`input`](Self::input) performs this restart itself once the handle has
+    /// extracted, so an explicit call is only needed to release a cached request early or after a
+    /// failure.
+    pub fn clear(&mut self) -> Result<()> {
+        self.restart(true)
+    }
+    /// Enables or disables light mode for this extractor.
+    ///
+    /// Light mode releases each intermediate tensor after its consumer ran, which lowers what a
+    /// request holds in memory. Native ncnn releases the bottom blob after the first consumer and
+    /// refills it from its producer, so a graph whose blob feeds several layers (a residual
+    /// connection, or an input consumed twice) needs light mode off. The network option stays
+    /// unchanged; [`light_mode`](Self::light_mode) reports the value this handle uses.
+    pub fn set_light_mode(&mut self, enable: bool) {
+        unsafe { sys::ncnn_rs_extractor_lightmode(self.raw, i32::from(enable)) };
+        self.light_mode = Some(enable);
+    }
+    /// Reports the light mode this extractor uses.
+    ///
+    /// The value is the per-extractor override when one was set, and the value the network option
+    /// held when this extractor was created otherwise.
+    pub fn light_mode(&self) -> bool {
+        self.light_mode.unwrap_or(self.net_light_mode)
+    }
+    /// Takes intermediate tensor storage from a caller pool for this extractor.
+    ///
+    /// # Safety
+    ///
+    /// The allocator stays alive and usable until this extractor is dropped, and no other extractor
+    /// or network claims the same pool at the same time. The native extractor stores the handle
+    /// without taking ownership.
+    pub unsafe fn set_blob_allocator(&mut self, allocator: &crate::PoolAllocator) {
+        unsafe { sys::ncnn_rs_extractor_allocator(self.raw, 0, allocator.as_raw()) };
+        self.blob_allocator = Some(allocator.as_raw());
+    }
+    /// Takes layer workspace from a caller pool for this extractor.
+    ///
+    /// # Safety
+    ///
+    /// The same lifetime and exclusivity rules as
+    /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
+    pub unsafe fn set_workspace_allocator(&mut self, allocator: &crate::PoolAllocator) {
+        unsafe { sys::ncnn_rs_extractor_allocator(self.raw, 1, allocator.as_raw()) };
+        self.workspace_allocator = Some(allocator.as_raw());
+    }
+    /// Takes key-value cache storage from a caller pool for this extractor.
+    ///
+    /// # Safety
+    ///
+    /// The same lifetime and exclusivity rules as
+    /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
+    pub unsafe fn set_kvcache_allocator(&mut self, allocator: &crate::PoolAllocator) {
+        unsafe { sys::ncnn_rs_extractor_allocator(self.raw, 2, allocator.as_raw()) };
+        self.kvcache_allocator = Some(allocator.as_raw());
+    }
+    /// Sets the key-value cache sequence length hint for this extractor.
+    ///
+    /// The hint sizes the cache a long-context graph reserves; zero clears it.
+    pub fn set_kvcache_max_seqlen_hint(&mut self, hint: usize) -> Result<()> {
+        let hint = i32::try_from(hint)
+            .map_err(|_| Error::invalid("Sequence hint exceeds native range"))?;
+        unsafe { sys::ncnn_rs_extractor_cache_hint(self.raw, hint) };
+        self.kvcache_hint = Some(hint);
+        Ok(())
+    }
+    /// Replaces the native handle when a request already ran, and re-applies the settings.
+    fn restart(&mut self, force: bool) -> Result<()> {
+        if !force && !self.extracted.replace(false) {
+            return Ok(());
+        }
+        self.extracted.set(false);
+        let raw = unsafe { sys::ncnn_extractor_create(self._net.raw) };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        let stale = std::mem::replace(&mut self.raw, raw);
+        unsafe { sys::ncnn_extractor_destroy(stale) };
+        unsafe {
+            if let Some(enabled) = self.light_mode {
+                sys::ncnn_rs_extractor_lightmode(self.raw, i32::from(enabled));
+            }
+            for (kind, allocator) in [
+                (0, self.blob_allocator),
+                (1, self.workspace_allocator),
+                (2, self.kvcache_allocator),
+            ] {
+                if let Some(allocator) = allocator {
+                    sys::ncnn_rs_extractor_allocator(self.raw, kind, allocator);
+                }
+            }
+            if let Some(hint) = self.kvcache_hint {
+                sys::ncnn_rs_extractor_cache_hint(self.raw, hint);
+            }
+        }
+        Ok(())
+    }
+    /// Drops the blobs a completed request cached, so a new input starts from the beginning.
+    fn reset_after_extraction(&mut self) -> Result<()> {
+        self.restart(false)
+    }
+    /// Starts the next input from the cached state this handle already holds.
+    ///
+    /// The default boundary between requests restarts the handle, which is what an independent
+    /// request needs. A graph that carries state across inputs, such as an attention layer that
+    /// keeps a key/value cache for token-by-token decoding, continues instead: this call applies to
+    /// the next input only, leaves the blobs the previous request produced in place, and skips the
+    /// restart that input would otherwise perform. The caller keeps the cache valid, so the graph
+    /// and the input both have to belong to one session.
+    ///
+    /// A graph without a cache reads the values the previous request left, because a layer runs
+    /// only while its output blob is empty.
+    pub fn continue_session(&mut self) {
+        self.continuation.set(true);
+    }
+    /// Ends the request boundary: a continuation keeps the cache, anything else restarts.
+    fn begin_request(&mut self) -> Result<()> {
+        if self.continuation.replace(false) {
+            return Ok(());
+        }
+        self.reset_after_extraction()
+    }
+
     fn extract_native(&self, target: &Target, stored: bool) -> Result<Mat> {
         self.ensure_not_reserved()?;
         let mut raw = std::ptr::null_mut();
@@ -144,6 +288,7 @@ impl Extractor<'_> {
             }
             return Err(Error::NativeAt("extract output", code));
         }
+        self.extracted.set(true);
         unsafe { Mat::owned(raw, false) }
     }
 
@@ -156,6 +301,7 @@ impl Extractor<'_> {
     pub fn input<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>, mat: Mat) -> Result<()> {
         let target = self.resolve(endpoint.into(), false)?;
         self.ensure_not_reserved()?;
+        self.begin_request()?;
         let mat = if mat.is_transferable() {
             mat
         } else {
@@ -214,11 +360,12 @@ impl Extractor<'_> {
         // An external tensor carries no storage refcount, and the light-mode forward path reads that
         // counter before it decides whether an in-place layer may write. Rejecting the combination
         // keeps a safe request from reaching that native read.
-        if self._net.option(crate::CpuOption::LightMode)? != 0 {
+        if self.light_mode() {
             return Err(Error::invalid(
                 "A borrowed input needs light mode off, because the native forward path reads the storage refcount that an external tensor does not have",
             ));
         }
+        self.begin_request()?;
         let info = mat.info();
         if !mat.f32_known || info.elemsize != 4 || info.elempack != 1 {
             return Err(Error::invalid(

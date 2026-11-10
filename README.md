@@ -117,6 +117,32 @@ let bytes: Vec<i8> = stored.to_i8()?;
 [typed tensor example](crates/ncnn/examples/typed_tensors.rs) and the
 [resident Vulkan example](crates/ncnn/examples/vulkan_resident.rs) run end to end.
 
+An extractor is safe to reuse: submitting an input restarts the request, so a second inference
+recomputes instead of returning the output the first one cached. Per-extractor settings cover what
+the network options do not, and they survive that restart:
+
+```rust
+let mut ex = net.extractor()?;
+ex.set_light_mode(false);
+ex.set_kvcache_max_seqlen_hint(2048)?;
+```
+
+A graph that keeps state across inputs, such as an attention cache for token-by-token decoding,
+calls `ex.continue_session()` before the next input so that input extends the cached state instead
+of restarting the request.
+
+Part of a tensor is readable without copying it. A view aliases the source storage and copies only
+when it is read or submitted as an input:
+
+```rust
+let plane = output.channel(0)?;
+let values = plane.to_f32()?;
+```
+
+A network and its extractor stay on the thread that created them, so a service gives each worker its
+own pair; the [thread example](crates/ncnn/examples/threads.rs) measures that against one network
+that uses every core.
+
 ## Performance
 
 Wrapper cost is measured against the native C API from the same SDK in one process, so the tables

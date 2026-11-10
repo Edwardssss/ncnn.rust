@@ -46,8 +46,11 @@ fn main() -> ncnn_rust::Result<()> {
 ```
 
 `PixelImage` checks color formats, stride and ROI before conversion or resizing. Read-only tensor
-views borrow their tensor and expose logical initialized data. `input` transfers crate-owned
-storage; raw-adopted inputs are copied so external storage dependencies stay with the caller.
+views borrow their tensor and expose logical initialized data: `Mat::channel`, `channel_range`,
+`depth`, `depth_range`, `column_range`, `row_range`, `batch` and `batch_range` return a `MatView`
+that aliases the source storage and copies only when it is read or submitted as an input. `input`
+transfers crate-owned storage; raw-adopted inputs are copied so external storage dependencies stay
+with the caller.
 
 Batched storage is built with `Mat::from_f32_batch`, and `TensorInfo::n` reports the batch count.
 `Mat::into_normalized` and `Mat::into_reshape` consume a tensor the caller no longer needs, which lets
@@ -118,6 +121,17 @@ output vector: together they leave no per-request allocation. A glibc host that 
 Exact affinity is an OS capability. Linux and Windows expose processor IDs and thread masks; macOS
 reports `Error::Unsupported` for exact mask operations while core inference and physical-core
 queries remain separate.
+
+An extractor serves repeated requests: `input` and `input_borrowed` restart the native handle once a
+request extracted, so a second inference recomputes rather than returning the cached blobs of the
+first. `Extractor::clear` performs that restart explicitly, and `Extractor::continue_session` keeps
+the cached state for the next input, which is what token-by-token decoding needs. The per-extractor
+settings `set_light_mode`, `set_blob_allocator`, `set_workspace_allocator`, `set_kvcache_allocator`
+and `set_kvcache_max_seqlen_hint` override the network options for one request path and survive a
+restart. Light mode releases each intermediate after its consumer, so a graph whose blob feeds two
+layers, such as a residual connection, needs it off. A network and its extractor stay on the thread
+that created them, which makes one pair per worker the scaling unit;
+`crates/ncnn/examples/threads.rs` measures that against a single network over every core.
 
 Quantized and half-precision outputs keep the width the producing layer wrote. `Net::infer_stored`
 returns `TensorInfo` and `Mat`, `Extractor::extract_stored` borrows one for the extractor scope and

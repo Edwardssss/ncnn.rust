@@ -250,7 +250,9 @@ extern "C" int ncnn_rs_mat_view(ncnn_mat_t mat, int axis, int start, int count, 
                                                : 0;
         if (start < 0 || count <= 0 || start > size || count > size - start)
             return -1;
-        if ((axis == 0 && m.dims != 1) || (axis == 1 && m.dims != 2) || (axis == 2 && m.dims != 4) || (axis == 3 && m.dims < 3))
+        // Each axis needs the extent it slices to exist; axis 0 slices a run of the first row, and
+        // axis 4 slices the batch, whose count is independent of the rank.
+        if ((axis == 1 && m.dims < 2) || ((axis == 2 || axis == 3) && m.dims < 3))
             return -1;
         ncnn::Mat view;
         switch (axis)

@@ -2,7 +2,7 @@
 //! readers, parameter dictionaries, unchecked tensor reads, reshape views, the three
 //! endpoint forms and concatenated outputs.
 
-use ncnn_rust::{DataReader, Endpoint, Mat, Net, ParamDict};
+use ncnn_rust::{DataReader, Endpoint, Extractor, Mat, Net, ParamDict, PoolAllocator};
 use std::io::Cursor;
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
 
@@ -77,6 +77,193 @@ fn pooled_networks_reuse_intermediate_memory() {
         extractor.input("b", input_b).unwrap();
         assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
     }
+}
+
+const REUSE_PARAM: &str =
+    "7767517\n3 3\nInput    in   0 1 in\nReLU     relu 1 1 in r\nBinaryOp sum  2 1 r in out 0=0\n";
+
+fn reuse_net() -> Net {
+    Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(REUSE_PARAM, &[])
+        .unwrap()
+}
+
+#[test]
+fn reusing_an_extractor_restarts_the_request() {
+    fn run(extractor: &mut Extractor<'_>, value: f32) -> Vec<f32> {
+        extractor
+            .input("in", Mat::from_f32(&[value; 3], &[3]).unwrap())
+            .unwrap();
+        extractor.extract_owned("out").unwrap().values
+    }
+
+    let net = reuse_net();
+    let mut extractor = net.extractor().unwrap();
+    assert_eq!(run(&mut extractor, -1.), [-1., -1., -1.]);
+    assert_eq!(run(&mut extractor, 5.), [10., 10., 10.]);
+
+    extractor.clear().unwrap();
+    assert_eq!(run(&mut extractor, -1.), [-1., -1., -1.]);
+
+    let mut fresh = net.extractor().unwrap();
+    assert_eq!(run(&mut fresh, 5.), [10., 10., 10.]);
+}
+
+#[test]
+fn a_continuation_keeps_the_cached_state() {
+    let net = reuse_net();
+    let mut extractor = net.extractor().unwrap();
+    extractor
+        .input("in", Mat::from_f32(&[6.; 3], &[3]).unwrap())
+        .unwrap();
+    assert_eq!(
+        extractor.extract_owned("out").unwrap().values,
+        [12., 12., 12.]
+    );
+
+    // A continuing input leaves the blobs in place, so the graph answers from them instead of
+    // recomputing; token-by-token decoding relies on that for its key/value cache.
+    extractor.continue_session();
+    extractor
+        .input("in", Mat::from_f32(&[-2.; 3], &[3]).unwrap())
+        .unwrap();
+    assert_eq!(
+        extractor.extract_owned("out").unwrap().values,
+        [12., 12., 12.]
+    );
+
+    // The next input is a request boundary again.
+    extractor
+        .input("in", Mat::from_f32(&[-2.; 3], &[3]).unwrap())
+        .unwrap();
+    assert_eq!(
+        extractor.extract_owned("out").unwrap().values,
+        [-2., -2., -2.]
+    );
+}
+
+#[test]
+fn extractor_settings_override_the_network() {
+    // A linear graph, because light mode releases each intermediate after its consumer and a graph
+    // whose input feeds two layers needs light mode off.
+    let net = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(
+            "7767517\n2 2\nInput in 0 1 in\nReLU  relu 1 1 in out\n",
+            &[],
+        )
+        .unwrap();
+    let mut extractor = net.extractor().unwrap();
+    assert!(!extractor.light_mode());
+    extractor.set_light_mode(true);
+    assert!(extractor.light_mode());
+    extractor.set_kvcache_max_seqlen_hint(32).unwrap();
+
+    extractor
+        .input("in", Mat::from_f32(&[-1f32; 3], &[3]).unwrap())
+        .unwrap();
+    assert_eq!(extractor.extract_owned("out").unwrap().values, [0., 0., 0.]);
+
+    // The handle asks for light mode, so a borrowed input stays rejected even though the network
+    // option is still off.
+    let values = [1f32, 2., 3.];
+    let borrowed = unsafe { Mat::from_external(&values, &[3]).unwrap() };
+    assert!(unsafe { extractor.input_borrowed("in", &borrowed) }.is_err());
+
+    // Per-request pools serve the same request, and they survive the restart a second input causes.
+    let mut blobs = PoolAllocator::new().unwrap();
+    blobs.configure(0.5, 1024).unwrap();
+    let workspace = PoolAllocator::new().unwrap();
+    let kvcache = PoolAllocator::new().unwrap();
+    let mut pooled = net.extractor().unwrap();
+    unsafe { pooled.set_blob_allocator(&blobs) };
+    unsafe { pooled.set_workspace_allocator(&workspace) };
+    unsafe { pooled.set_kvcache_allocator(&kvcache) };
+    pooled.set_kvcache_max_seqlen_hint(8).unwrap();
+    for value in [5f32, -2.] {
+        pooled
+            .input("in", Mat::from_f32(&[value; 3], &[3]).unwrap())
+            .unwrap();
+        assert_eq!(
+            pooled.extract_owned("out").unwrap().values,
+            [value.max(0.); 3]
+        );
+    }
+    blobs.clear();
+}
+
+#[test]
+fn tensor_views_alias_the_source() {
+    let values: Vec<f32> = (0..8).map(|index| index as f32).collect();
+    let tensor = Mat::from_f32(&values, &[2, 2, 2]).unwrap();
+    assert!(!tensor.is_empty());
+    assert_eq!(tensor.info().shape(), [2, 2, 1, 2]);
+    assert_eq!(tensor.info().total(), 8);
+
+    let channel = tensor.channel(1).unwrap();
+    assert_eq!(channel.info().shape(), [2, 2, 1, 1]);
+    assert_eq!(channel.as_f32_slice().unwrap(), [4., 5., 6., 7.]);
+
+    let channels = tensor.channel_range(0, 2).unwrap();
+    assert_eq!(channels.as_f32_slice().unwrap(), values.as_slice());
+
+    let rows = tensor.row_range(1, 1).unwrap();
+    // The native helper aliases rows of the first channel plane only.
+    assert_eq!(rows.info().shape(), [2, 1, 1, 1]);
+    assert_eq!(rows.to_f32().unwrap(), [2., 3.]);
+
+    let elements = tensor.column_range(1, 1).unwrap();
+    // The native helper aliases a run of the first row.
+    assert_eq!(elements.info().shape(), [1, 1, 1, 1]);
+    assert_eq!(elements.to_f32().unwrap(), [1.0]);
+
+    let plane = tensor.depth(0).unwrap();
+    assert_eq!(plane.info().shape(), [2, 2, 1, 1]);
+    assert_eq!(plane.as_f32_slice().unwrap(), [0., 1., 2., 3.]);
+
+    let depths = tensor.depth_range(0, 1).unwrap();
+    assert_eq!(depths.info().shape(), [2, 2, 1, 1]);
+
+    assert!(tensor.channel(2).is_err());
+    assert!(tensor.row_range(1, 2).is_err());
+    assert!(tensor.column_range(2, 1).is_err());
+
+    let batched = Mat::from_f32_batch(&values, &[2, 2], 2).unwrap();
+    assert_eq!(
+        batched.batch(0).unwrap().to_f32().unwrap(),
+        [0., 1., 2., 3.]
+    );
+    assert_eq!(
+        batched.batch(1).unwrap().to_f32().unwrap(),
+        [4., 5., 6., 7.]
+    );
+    assert!(batched.batch(2).is_err());
+
+    // A view copies when it goes back in as an input, because it keeps no storage of its own. The
+    // graph adds the ReLU of its input to that input, so the values double.
+    let net = reuse_net();
+    let mut extractor = net.extractor().unwrap();
+    extractor
+        .input("in", tensor.channel(0).unwrap().deep_clone().unwrap())
+        .unwrap();
+    assert_eq!(
+        extractor.extract_owned("out").unwrap().values,
+        [0., 2., 4., 6.]
+    );
+}
+
+#[test]
+fn layer_handles_follow_the_loaded_graph() {
+    let net = reuse_net();
+    assert_eq!(net.layers().unwrap().len(), 3);
+    let handle = unsafe { net.layer_handle(0) }.unwrap();
+    assert!(!handle.is_null());
+    assert!(unsafe { net.layer_handle(3) }.is_err());
 }
 
 #[test]

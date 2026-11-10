@@ -65,6 +65,29 @@ refcount as shared storage so the in-place layer clones instead of writing throu
 buffer. test_relu, test_absval, test_convolution and test_packing pass on the patched tree under
 Linux x86-64.
 
+## Extractor reuse
+
+Recorded on 2026-11-11 with a three-layer `Input -> ReLU -> BinaryOp` graph whose output is the sum of
+the ReLU and the input, one extractor, two requests with different inputs, ncnn 20261020 on Windows
+x64. A fresh handle answered every request, while a reused handle answered the second request with
+the values of the first:
+
+| Input | Fresh extractor | Reused extractor |
+|---|---|---|
+| `-1` | `[-1, -1, -1]` | `[-1, -1, -1]` |
+| `5` | `[10, 10, 10]` | `[-1, -1, -1]` |
+
+The cause is upstream: a layer runs only while its output blob is empty, and a completed request
+leaves that blob filled. `Extractor::clear` looks like the fix but calls `blob_mats.clear()`, after
+which the handle rejects every input, so a restart recreates the native extractor instead. The
+wrapper therefore restarts in `input` and `input_borrowed`, re-applies the per-extractor settings to
+the new handle, and both cases above return their own answer.
+
+The same campaign recorded the light-mode restriction the setter documents: with light mode on, a
+graph whose input feeds two layers returns the values of the second consumer from a released blob
+(`[1, 2, 3]` instead of `[-1, -1, -1]` for an input of `-1`), because `Input` cannot refill a blob
+after its first consumer released it. Linear graphs are unaffected.
+
 ## Pooled request paths
 
 `api_benchmark pooled-request 200 65536` on the WSL2 guest and on the Windows host, five rotated
@@ -82,6 +105,22 @@ A separate probe attributed the default cost before the pools existed: on the Wi
 extractor itself costs 207 ns, an owned input costs 27.9 us, and the forward plus read-out costs 200
 to 290 us, while the same forward under light mode costs 16 to 44 us. The native intermediate-tensor
 allocation, not the wrapper, is what the pools remove.
+
+The pooled figures were measured again after the extractor restart landed, three runs of the same
+mode per host at 65536 elements: the WSL2 guest reported `guard` 16426 to 17228 ns, `extract_owned`
+23157 to 24121 ns, `infer_into` 22960 to 24310 ns and `infer_borrowed_into` 16911 to 17696 ns, and
+the Windows host reported `guard` 37474 ns, `extract_owned` 147012 ns, `infer_into` 48503 ns and
+`infer_borrowed_into` 18978 ns at 100 iterations. The restart costs one native extractor
+construction per request, which stays inside the spread of these runs.
+
+## Worker scaling
+
+`cargo run --release --example threads` on both hosts, 65536 elements and one ReLU layer, native
+thread count one per worker. Three Windows runs reported 192 to 221 us per request for one network
+over all 16 logical cores, 147 to 188 us for one worker on one thread, 95 to 101 us for two workers
+and 44 to 57 us for four, and one WSL2 run reported 108, 38, 27 and 9 us on 8 logical cores. The
+native thread pool returns little on a graph this small, while independent workers scale the
+aggregate, and the spread between runs of one configuration follows the load of the host.
 
 ## Windows heap and Vulkan runs
 

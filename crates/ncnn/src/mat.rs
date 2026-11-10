@@ -220,6 +220,30 @@ fn padded(extent: i32, before: usize, after: usize, operation: &str) -> Result<i
         .map(|total| total as i32)
         .ok_or_else(|| Error::invalid(format!("{operation} exceeds the native extent range")))
 }
+fn to_index(value: usize) -> Result<i32> {
+    native_extent(value, "Tensor view index")
+}
+impl TensorInfo {
+    /// Reports the storage slots one batch item occupies, excluding batch.
+    ///
+    /// This is the native `Mat::total` value, the channel stride multiplied by the channel count, so
+    /// it includes inter-channel padding.
+    pub fn total(&self) -> usize {
+        self.cstep.saturating_mul(self.c.max(0) as usize)
+    }
+    /// Reports the logical extents in native axis order: width, height, depth, channels.
+    ///
+    /// [`dims`](Self::dims) says how many of the four carry the tensor, so a two-dimensional tensor
+    /// uses the first two entries.
+    pub fn shape(&self) -> [usize; 4] {
+        [
+            self.w.max(0) as usize,
+            self.h.max(0) as usize,
+            self.d.max(0) as usize,
+            self.c.max(0) as usize,
+        ]
+    }
+}
 impl Mat {
     /// Copies FP32 values into a new tensor of the given rank and extents.
     ///
@@ -377,6 +401,76 @@ impl Mat {
     }
     pub(crate) fn is_transferable(&self) -> bool {
         self.provenance == Provenance::Owned
+    }
+    /// Borrows one channel as a read-only alias.
+    ///
+    /// The alias shares this tensor's storage. It rejects a channel outside `0..c`, and the source
+    /// stays borrowed for as long as the view lives.
+    pub fn channel(&self, channel: usize) -> Result<MatView<'_>> {
+        self.native_view(3, channel, 1, "channel")
+    }
+    /// Borrows a run of channels as a read-only alias.
+    pub fn channel_range(&self, channel: usize, channels: usize) -> Result<MatView<'_>> {
+        self.native_view(3, channel, channels, "channel range")
+    }
+    /// Borrows one depth slice as a read-only alias.
+    pub fn depth(&self, depth: usize) -> Result<MatView<'_>> {
+        self.native_view(2, depth, 1, "depth slice")
+    }
+    /// Borrows a run of depth slices as a read-only alias.
+    pub fn depth_range(&self, depth: usize, depths: usize) -> Result<MatView<'_>> {
+        self.native_view(2, depth, depths, "depth range")
+    }
+    /// Borrows `width` columns starting at `x` as a one-dimensional alias of the first row.
+    pub fn column_range(&self, x: usize, width: usize) -> Result<MatView<'_>> {
+        self.native_view(0, x, width, "column range")
+    }
+    /// Borrows `rows` rows starting at `y` as a read-only alias of the first channel plane.
+    pub fn row_range(&self, y: usize, rows: usize) -> Result<MatView<'_>> {
+        self.native_view(1, y, rows, "row range")
+    }
+    /// Borrows one batch item as a read-only alias.
+    pub fn batch(&self, batch: usize) -> Result<MatView<'_>> {
+        self.native_view(4, batch, 1, "batch item")
+    }
+    /// Borrows `batches` batch items starting at `batch` as a read-only alias.
+    pub fn batch_range(&self, batch: usize, batches: usize) -> Result<MatView<'_>> {
+        self.native_view(4, batch, batches, "batch range")
+    }
+    fn native_view(
+        &self,
+        axis: i32,
+        start: usize,
+        count: usize,
+        operation: &'static str,
+    ) -> Result<MatView<'_>> {
+        let mut raw = std::ptr::null_mut();
+        let code = unsafe {
+            sys::ncnn_rs_mat_view(
+                self.raw,
+                axis,
+                to_index(start)?,
+                to_index(count)?,
+                std::ptr::addr_of_mut!(raw),
+            )
+        };
+        if code != 0 {
+            return Err(Error::NativeAt(operation, code));
+        }
+        // A view keeps no storage of its own, so it is adopted rather than owned: a consumed input
+        // copies it instead of transferring caller storage.
+        let mut mat = unsafe { Self::owned(raw, self.f32_known)? };
+        mat.provenance = Provenance::Adopted;
+        Ok(MatView { mat, _source: self })
+    }
+    /// Reports whether the tensor holds no elements.
+    ///
+    /// A tensor is empty when native storage has not been created or a shape dimension leaves it
+    /// without storage slots, which is what a failed allocation also reports.
+    pub fn is_empty(&self) -> bool {
+        let info = self.info();
+        let detached = unsafe { sys::ncnn_mat_get_data(self.raw).is_null() };
+        detached || info.c <= 0 || info.cstep == 0
     }
     /// Returns the native shape and stride metadata.
     pub fn info(&self) -> TensorInfo {
@@ -1137,6 +1231,46 @@ impl Mat {
         let mut mat = Self::owned(raw, f32_known)?;
         mat.provenance = Provenance::Adopted;
         Ok(mat)
+    }
+}
+/// A read-only alias of part of a tensor.
+///
+/// A view shares the source storage: it neither copies nor extends the source's lifetime, so it
+/// borrows the tensor it came from and cannot be transferred into an extractor. Submitting one
+/// through [`Extractor::input`](crate::Extractor::input) copies, because an alias keeps no storage
+/// of its own.
+pub struct MatView<'a> {
+    mat: Mat,
+    _source: &'a Mat,
+}
+impl MatView<'_> {
+    /// Returns the borrowed tensor metadata.
+    pub fn info(&self) -> TensorInfo {
+        self.mat.info()
+    }
+    /// Reports whether the region holds no elements.
+    pub fn is_empty(&self) -> bool {
+        self.mat.is_empty()
+    }
+    /// Borrows contiguous FP32 storage without padding.
+    pub fn as_f32_slice(&self) -> Result<&[f32]> {
+        self.mat.as_f32_slice()
+    }
+    /// Borrows one channel of this region, skipping inter-channel padding.
+    pub fn channel_f32(&self, channel: usize) -> Result<&[f32]> {
+        self.mat.channel_f32(channel)
+    }
+    /// Copies logical FP32 elements into a new vector.
+    pub fn to_f32(&self) -> Result<Vec<f32>> {
+        self.mat.to_f32()
+    }
+    /// Replaces the vector contents with logical FP32 elements.
+    pub fn to_f32_into(&self, buffer: &mut Vec<f32>) -> Result<()> {
+        self.mat.to_f32_into(buffer)
+    }
+    /// Copies the region into a tensor with independent storage.
+    pub fn deep_clone(&self) -> Result<Mat> {
+        self.mat.deep_clone()
     }
 }
 /// A read-only reshape retaining its source and allocator provenance.

@@ -110,6 +110,7 @@ jobs:
           cargo run -p ncnn-rust --example api_benchmark -- pooled-request 50 4096
           cargo run -p ncnn-rust --example fast_allocator
           cargo run -p ncnn-rust --example heap_retention
+          cargo run -p ncnn-rust --example threads
 
       # A second pass catches state that only breaks after the first one.
       - name: Repeat the suite

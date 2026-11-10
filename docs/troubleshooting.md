@@ -178,3 +178,44 @@ example in `crates/ncnn/examples/fast_allocator.rs` reproduces the Windows figur
 `crates/ncnn/examples/heap_retention.rs` prints the Linux figures before and after the call. A
 library cannot set the global allocator for its caller, so the allocator stays an application
 decision; the heap settings are the one part the crate can apply itself.
+
+## A reused extractor answers with the previous request
+
+**Symptom:** the second `extract` on one handle returns the values the first request produced, even
+though a different input was submitted.
+
+**Cause:** the native extractor caches the blob it produced and recomputes a layer only while that
+blob is empty, so a handle that already extracted answers from the cache. Native ncnn offers
+`Extractor::clear` for this, but that call empties the blob table and leaves the handle unable to
+accept input.
+
+**Fix:** nothing, when the handle comes from this crate: `input` and `input_borrowed` restart the
+handle first, which recreates the native extractor and re-applies the per-extractor settings. A
+handle built directly from `ncnn_rust_sys` recreates its extractor the same way instead of calling
+`clear`. The restart costs one native extractor construction per request, which `api_benchmark`
+shows inside the request-path figures.
+
+A graph that carries state across inputs, such as an attention layer with a key/value cache, asks for
+the opposite: `Extractor::continue_session` keeps the cached state for the next input, and the
+following input starts a new request again.
+
+## A graph whose input feeds two layers returns wrong values in light mode
+
+**Symptom:** a residual or skip connection computes different values from the reference, while the
+same graph is correct with light mode off.
+
+**Cause:** light mode releases a bottom blob after its first consumer ran and refills it from its
+producer, and the `Input` layer cannot refill a blob once its data was released. A blob that feeds
+two layers, or an input consumed twice, therefore reaches its second consumer empty.
+
+**Fix:** keep light mode off for such graphs:
+
+```rust
+let mut extractor = net.extractor()?;
+extractor.set_light_mode(false);
+```
+
+The per-extractor call leaves the network option unchanged, so a second extractor still starts from
+the option value the network was loaded with. `Extractor::light_mode` reports the value a handle
+uses, and `Extractor::input_borrowed` rejects a borrowed input while that value is on, because the
+native forward path reads the storage refcount an external tensor does not carry.

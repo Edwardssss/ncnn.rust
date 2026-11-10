@@ -265,6 +265,26 @@ impl Net {
     pub fn reuses_blob_memory(&self) -> bool {
         self.pools.is_some()
     }
+    /// Returns the native layer handle at `index` for advanced C API calls.
+    ///
+    /// [`layers`](Self::layers) describes the same layer without handing out a handle. The handle
+    /// belongs to the network and stays valid until the graph is cleared or reloaded; ncnn exposes
+    /// no mutation API on it through its C interface other than the model loading the crate already
+    /// performs, so this is an inspection and interop hook rather than a way to reshape a graph.
+    ///
+    /// # Safety
+    ///
+    /// The caller must not destroy the layer, replace its fields, or call into it while a request
+    /// runs on this network.
+    pub unsafe fn layer_handle(&self, index: usize) -> Result<sys::ncnn_layer_t> {
+        let index =
+            i32::try_from(index).map_err(|_| Error::invalid("Layer index exceeds native range"))?;
+        let raw = sys::ncnn_rs_net_layer_handle(self.raw, index);
+        if raw.is_null() {
+            return Err(Error::invalid("Layer index is outside the loaded graph"));
+        }
+        Ok(raw)
+    }
     /// Runs owned inputs and returns validated, independently owned final buffers.
     ///
     /// Every output is converted to FP32, so a network that returns quantized storage needs
@@ -805,11 +825,11 @@ impl Net {
     }
     /// Creates a fresh native inference cache for one request path.
     ///
-    /// The native extractor caches intermediate blobs, so a changed input shape needs a new
-    /// extractor rather than a re-used one. Feeding another input into an existing extractor keeps
-    /// the cached downstream blobs, which is what the key/value cache tests rely on. The call needs
-    /// loaded weights, and a live scoped output reserves the network, so create the next extractor
-    /// after dropping the previous guard.
+    /// The handle restarts itself when a request already ran, so one extractor serves repeated
+    /// requests without returning a cached answer. A changed input shape still needs a new
+    /// extractor when the graph was loaded for one shape. The call needs loaded weights, and a live
+    /// scoped output reserves the network, so create the next extractor after dropping the previous
+    /// guard.
     pub fn extractor(&self) -> Result<Extractor<'_>> {
         if self.guard.output_borrowed.get() {
             return Err(Error::invalid("A scoped output reserves this network"));
@@ -828,9 +848,21 @@ impl Net {
             raw,
             _net: self,
             low_copy: Cell::new(true),
+            extracted: Cell::new(false),
+            continuation: Cell::new(false),
+            light_mode: None,
+            net_light_mode: self.option(crate::CpuOption::LightMode)? != 0,
+            blob_allocator: None,
+            workspace_allocator: None,
+            kvcache_allocator: None,
+            kvcache_hint: None,
         })
     }
     /// Registers an advanced native custom-layer factory before loading parameters.
+    ///
+    /// A factory registered for a built-in type index runs instead of that built-in
+    /// implementation, which is how a caller replaces one; ncnn consults custom factories before it
+    /// falls back to its own table.
     ///
     /// # Safety
     /// Callbacks and userdata must remain valid until this network is destroyed.

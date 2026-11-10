@@ -158,7 +158,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "ncnn-rust"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ncnn-rust-sys",
 ]
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "ncnn-rust-sys"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bindgen",
  "cc",
