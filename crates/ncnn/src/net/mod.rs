@@ -7,7 +7,7 @@ mod output;
 
 pub use blob::{BlobId, Endpoint};
 pub use extractor::{Extractor, OutputGuard};
-pub use graph::{BlobInfo, LayerInfo};
+pub use graph::{BlobInfo, LayerInfo, ShapeInfo};
 pub use output::{FinalOutput, OutputRange};
 
 use crate::{

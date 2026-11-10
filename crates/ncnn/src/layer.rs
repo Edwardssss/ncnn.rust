@@ -1,6 +1,23 @@
 use crate::{error::status, sys, Error, Mat, Options, ParamDict, Result};
 use std::{ffi::CString, marker::PhantomData, rc::Rc};
 
+/// Returns the registered type index of a layer type.
+///
+/// The index identifies the type in a model and is what
+/// [`Net::register_custom_layer_by_typeindex`](crate::Net::register_custom_layer_by_typeindex)
+/// replaces. An unknown name returns [`Error::Invalid`].
+pub fn layer_type_index(name: &str) -> Result<i32> {
+    let name = CString::new(name)?;
+    let index = unsafe { sys::ncnn_layer_type_to_index(name.as_ptr()) };
+    if index < 0 {
+        return Err(Error::invalid(format!(
+            "Unknown layer type {}",
+            name.to_string_lossy()
+        )));
+    }
+    Ok(index)
+}
+
 /// A single CPU layer with automatic pipeline cleanup.
 pub struct Layer {
     raw: sys::ncnn_layer_t,

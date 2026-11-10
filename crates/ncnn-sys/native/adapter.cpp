@@ -954,3 +954,40 @@ extern "C" int ncnn_rs_net_blob_info(ncnn_net_t net, int index, const char** nam
     }
     NCNN_RS_CATCH
 }
+
+extern "C" int ncnn_rs_net_layer_shape(ncnn_net_t net, int index, int top, int blob_index,
+                                       int* dims, int* w, int* h, int* d, int* c)
+{
+    NCNN_RS_TRY
+    {
+        if (!net || !dims || !w || !h || !d || !c)
+            return -1;
+        const std::vector<ncnn::Layer*>& layers = ((ncnn::Net*)net->pthis)->layers();
+        if (index < 0 || (size_t)index >= layers.size())
+            return -1;
+        const ncnn::Layer* layer = layers[(size_t)index];
+        if (!layer)
+            return -1;
+        const std::vector<ncnn::Mat>& shapes = top ? layer->top_shapes : layer->bottom_shapes;
+        if (blob_index < 0)
+            return -1;
+        if ((size_t)blob_index >= shapes.size())
+        {
+            // A layer that recorded no shape reports zero extents rather than an error.
+            *dims = 0;
+            *w = 0;
+            *h = 0;
+            *d = 0;
+            *c = 0;
+            return 0;
+        }
+        const ncnn::Mat& shape = shapes[(size_t)blob_index];
+        *dims = shape.dims;
+        *w = shape.dims ? shape.w : 0;
+        *h = shape.dims ? shape.h : 0;
+        *d = shape.dims ? shape.d : 0;
+        *c = shape.dims ? shape.c : 0;
+        return 0;
+    }
+    NCNN_RS_CATCH
+}

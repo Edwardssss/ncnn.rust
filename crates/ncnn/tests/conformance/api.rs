@@ -55,7 +55,15 @@ fn data_reader_accepts_any_read() {
 #[test]
 fn param_dict_round_trips_every_entry_kind() {
     let mut params = ParamDict::new().unwrap();
+    assert_eq!(params.kind(0).unwrap(), None, "an unset identifier");
     params.set_int(0, 7).unwrap();
+    assert_eq!(params.kind(0).unwrap(), Some(ncnn_rust::ParamKind::Int));
+    params.set_float(1, 0.25).unwrap();
+    assert_eq!(params.kind(1).unwrap(), Some(ncnn_rust::ParamKind::Float));
+    params
+        .set_array(2, &Mat::from_f32(&[1., 2.], &[2]).unwrap())
+        .unwrap();
+    assert_eq!(params.kind(2).unwrap(), Some(ncnn_rust::ParamKind::Array));
     params.set_float(1, 0.25).unwrap();
     let array = Mat::from_f32(&[1., 2.], &[2]).unwrap();
     params.set_array(2, &array).unwrap();

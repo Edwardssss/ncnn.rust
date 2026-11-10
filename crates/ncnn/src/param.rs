@@ -41,6 +41,26 @@ impl Drop for PoolAllocator {
     }
 }
 
+/// Storage form of one parameter dictionary entry.
+///
+/// The variant follows the native type code, which decides the getter a layer uses. A binary
+/// parameter stream carries an untyped scalar that both scalar getters read, while a text entry
+/// stores an integer, a float, a tensor or a string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ParamKind {
+    /// Untyped binary scalar, readable through either scalar getter.
+    Scalar,
+    /// Integer value.
+    Int,
+    /// Single precision value.
+    Float,
+    /// Tensor or binary array value.
+    Array,
+    /// Text value.
+    Text,
+}
+
 /// Owns a native parameter dictionary for standalone layers.
 pub struct ParamDict {
     raw: sys::ncnn_paramdict_t,
@@ -79,6 +99,21 @@ impl ParamDict {
             sys::ncnn_paramdict_set_float(self.raw, id, value);
         }
         Ok(())
+    }
+    /// Reports how a parameter is stored, or `None` when the identifier is unset.
+    ///
+    /// A custom layer reads parameters by identifier, so this decides which getter applies.
+    pub fn kind(&self, id: i32) -> Result<Option<ParamKind>> {
+        Self::check(id)?;
+        let code = unsafe { sys::ncnn_paramdict_get_type(self.raw, id) };
+        Ok(match code {
+            1 => Some(ParamKind::Scalar),
+            2 => Some(ParamKind::Int),
+            3 => Some(ParamKind::Float),
+            4..=6 => Some(ParamKind::Array),
+            7 => Some(ParamKind::Text),
+            _ => None,
+        })
     }
     /// Reads an integer parameter, falling back to the default.
     pub fn get_int(&self, id: i32, default: i32) -> Result<i32> {

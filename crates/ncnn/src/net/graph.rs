@@ -4,6 +4,31 @@ use super::Net;
 use crate::{sys, Error, Result};
 use std::ffi::CStr;
 
+/// One shape a layer recorded for one of its blobs.
+///
+/// A layer records the extents it resolved for its inputs and outputs when the graph carries shape
+/// information, which is how a caller sees a layer contract before running it. `dims` stays at zero
+/// when ncnn recorded no shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShapeInfo {
+    /// Shape rank.
+    pub dims: i32,
+    /// Width extent.
+    pub w: i32,
+    /// Height extent.
+    pub h: i32,
+    /// Depth extent.
+    pub d: i32,
+    /// Channel extent.
+    pub c: i32,
+}
+impl ShapeInfo {
+    /// Reports whether ncnn recorded a shape.
+    pub fn has_shape(&self) -> bool {
+        self.dims > 0
+    }
+}
+
 /// One layer of a loaded network.
 ///
 /// The support flags are ncnn's declarations for that layer type, which is where the runtime
@@ -17,6 +42,10 @@ pub struct LayerInfo {
     pub kind: String,
     /// Registered type index.
     pub typeindex: i32,
+    /// Shapes this layer recorded for its inputs, in bottom order.
+    pub bottom_shapes: Vec<ShapeInfo>,
+    /// Shapes this layer recorded for its outputs, in top order.
+    pub top_shapes: Vec<ShapeInfo>,
     /// Number of bottom blobs the layer reads.
     pub bottoms: usize,
     /// Number of top blobs the layer writes.
@@ -124,10 +153,38 @@ impl Net {
         let text = |pointer: *const std::os::raw::c_char| unsafe {
             CStr::from_ptr(pointer).to_string_lossy().into_owned()
         };
+        let shape = |top: bool, blob: usize| -> Result<ShapeInfo> {
+            let mut shape = ShapeInfo::default();
+            let code = unsafe {
+                sys::ncnn_rs_net_layer_shape(
+                    self.raw,
+                    index,
+                    i32::from(top),
+                    blob as i32,
+                    &mut shape.dims,
+                    &mut shape.w,
+                    &mut shape.h,
+                    &mut shape.d,
+                    &mut shape.c,
+                )
+            };
+            if code != 0 {
+                return Err(Error::NativeAt("read a layer shape", code));
+            }
+            Ok(shape)
+        };
+        let bottom_shapes = (0..bottoms.max(0) as usize)
+            .map(|blob| shape(false, blob))
+            .collect::<Result<Vec<_>>>()?;
+        let top_shapes = (0..tops.max(0) as usize)
+            .map(|blob| shape(true, blob))
+            .collect::<Result<Vec<_>>>()?;
         Ok(LayerInfo {
             name: text(name),
             kind: text(kind),
             typeindex,
+            bottom_shapes,
+            top_shapes,
             bottoms: bottoms.max(0) as usize,
             tops: tops.max(0) as usize,
             support_vulkan: flags & (1 << 0) != 0,

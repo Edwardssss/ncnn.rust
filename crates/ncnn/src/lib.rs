@@ -35,14 +35,14 @@ pub use reader::DataReader;
 mod param;
 
 pub use error::{Error, Result};
-pub use layer::{Layer, ModelBin};
+pub use layer::{layer_type_index, Layer, ModelBin};
 pub use mat::{BorderMode, Borders, ElementKind, Mat, PixelFormat, ReshapeView, TensorInfo};
 pub use net::{
     BlobId, BlobInfo, Endpoint, Extractor, FinalOutput, LayerInfo, Net, NetBuilder, OutputGuard,
-    OutputRange,
+    OutputRange, ShapeInfo,
 };
 pub use options::{CpuOption, OptionFlag, Options};
-pub use param::{ParamDict, PoolAllocator};
+pub use param::{ParamDict, ParamKind, PoolAllocator};
 
 /// Returns the pinned native version.
 pub fn version() -> &'static str {
@@ -51,6 +51,14 @@ pub fn version() -> &'static str {
             .to_str()
             .unwrap_or("unknown")
     }
+}
+
+/// Returns the pinned native version as the integer ncnn encodes, which is the release date.
+///
+/// Compare against a known value to decide whether a newer declaration is available; the string
+/// form is in [`version`].
+pub fn version_number() -> i32 {
+    unsafe { sys::ncnn_version_number() }
 }
 
 /// Returns the native logical CPU count.
