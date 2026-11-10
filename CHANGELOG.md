@@ -9,12 +9,27 @@ library upgrade is a minor change of this crate.
 
 ### Added
 
+- `Net::layers` and `Net::blobs` describe the loaded graph: layer names, registered types, type
+  indices, blob counts and the support flags ncnn declares per layer type, plus the wiring and
+  recorded shape of every blob.
+- Zero-copy input: `Mat::from_external` borrows caller storage, `Extractor::input_borrowed` submits it
+  without a copy and `Net::infer_borrowed` bounds the borrow to one request.
+- `Net::option` reads the option value a loaded network actually uses.
+- Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
+  `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border`,
+  `Mat::from_pixels_roi`, `Mat::from_pixels_roi_resize` and the `BorderMode` argument.
+- `Net::load_param_reader` and `Net::load_model_reader` load from a `DataReader`, and
+  `register_custom_layer_by_typeindex` registers a factory for a type index.
 - CI compares the public API with the published release, resolves every documentation link and
   anchor offline, and a `v*` tag publishes both packages in dependency order before creating the
   GitHub release from the changelog section.
 
 ### Changed
 
+- `DataReader::from_bytes` builds a bounded memory reader: a read is clamped to the bytes that
+  remain instead of failing, and the same handle scans parameter text, which the reader-based
+  loaders rely on.
+- The fuzz target also feeds the binary parameter loader and the reader loaders.
 - The coverage job writes an lcov with per-line records, prints the summary, fails below 85 percent
   line coverage, and rejects a report without `DA` records.
 - The nightly fuzz workflow runs its target on the nightly toolchain, which `rust-toolchain.toml`

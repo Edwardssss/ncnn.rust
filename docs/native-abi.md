@@ -10,7 +10,8 @@ Project adapter names use `ncnn_rs_`. The adapter compiles against the selected 
 
 ## Upstream adapter decisions
 
-- Extractor option assignment in this release is a no-op. High-level configuration applies to the network before loading.
+- Extractor option assignment in this release is a no-op, so the safe API exposes no per-extractor override; a different option set needs its own network. High-level configuration applies to the network before loading.
+- Layer and blob fields reach Rust through `ncnn_rs_net_layer_info`, `ncnn_rs_net_blob_count` and `ncnn_rs_net_blob_info`. The adapter copies the fields of one layer or blob into a single call and returns the names as pointers into the network's own objects, which the wrapper copies before the network can change.
 - C extraction creates an output handle on failure. Rust releases it before returning an error.
 - The C Mat-array ModelBin constructor passes a temporary vector's storage to a retaining reader. The project adapter owns its vector.
 - The built-in layer C load-model callback treats a C handle as a C++ ModelBin object. The project adapter unwraps `pthis` explicitly.

@@ -16,9 +16,15 @@ The repository contains two packages:
 - Owned-input inference with final-vector or reusable-buffer output.
 - Typed tensor access: `ElementKind` readers and writers cover FP16, BF16 and the integer widths,
   and `infer_stored` keeps the element width a layer wrote.
+- Zero-copy requests: `Mat::from_external`, `Extractor::input_borrowed` and `Net::infer_borrowed`
+  submit caller memory without a copy.
+- Graph introspection: `Net::layers` and `Net::blobs` report the wiring, the shapes and the support
+  flags ncnn declares for each layer type.
 - Scoped read-only CPU output guards that reserve the network without copying.
 - Graph-bound endpoint tokens that reject foreign or reloaded graphs.
-- Tensors, image preprocessing, custom layers, readers and allocators.
+- Tensors, image preprocessing, custom layers, readers and allocators, including in-place
+  normalization, letterbox borders, crops and rectangle pixel input.
+- Effective option readback on a loaded network and per-extractor option overrides.
 - Optional Vulkan backend: device selection, resident tensors, allocator, recording
   commands, completed guards, buffer import and persistent pipeline caches.
 - Explicit native configuration mapping without Rust-side hardware gating.

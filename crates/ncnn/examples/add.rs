@@ -27,6 +27,30 @@ fn main() -> ncnn_rust::Result<()> {
     let input_a = net.resolve_blob("a")?;
     let input_b = net.resolve_blob("b")?;
     let sum = net.resolve_blob("sum")?;
+
+    // The loaded graph describes itself: layer types, blob wiring and the support flags ncnn
+    // declares for each layer type.
+    for layer in net.layers()? {
+        println!(
+            "{} ({}) reads {} blobs and writes {}; vulkan: {}",
+            layer.name, layer.kind, layer.bottoms, layer.tops, layer.support_vulkan
+        );
+    }
+    for blob in net.blobs()? {
+        println!(
+            "{} produced by {} and read by {}",
+            blob.name, blob.producer, blob.consumer
+        );
+    }
+
+    // One request over borrowed FP32 slices: the native extractor reads caller memory in place,
+    // and the borrow ends with the call.
+    let borrowed = net.infer_borrowed(
+        &[("a", &[1., 2., 3.], &[3]), ("b", &[4., 5., 6.], &[3])],
+        &["sum"],
+    )?;
+    println!("Borrowed request: {:?}", borrowed[0].values);
+
     let mut values = Vec::with_capacity(3);
     for _ in 0..2 {
         let mut extractor = net.extractor()?;

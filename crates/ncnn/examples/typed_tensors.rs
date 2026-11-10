@@ -4,7 +4,7 @@
 //! are; `from_typed` goes the other way round. Native `Dequantize` expects 32-bit integers, so a
 //! one-byte tensor is read through `to_i8` rather than through that layer.
 
-use ncnn_rust::{ElementKind, Mat, Net};
+use ncnn_rust::{BorderMode, ElementKind, Mat, Net, PixelFormat};
 
 const GRAPH: &str = "7767517\n2 2\nInput input 0 1 input\nQuantize quantize 1 1 input stored 0=1\n";
 
@@ -43,5 +43,23 @@ fn main() -> ncnn_rust::Result<()> {
         Ok(values) => println!("unexpected f32 read: {values:?}"),
         Err(error) => println!("wrong format: {error}"),
     }
+
+    // Preprocessing helpers run on the native kernels: one in-place pass over a reusable buffer,
+    // a letterbox border, the matching crop, and one rectangle of a frame read into a tensor.
+    let mut plane = Mat::from_f32(&[1., 2., 3., 4.], &[2, 2])?;
+    plane.fill(0.5)?;
+    plane.normalize_in_place(&[0.5], &[2.])?;
+    let padded = plane.copy_make_border(1, 1, 1, 1, BorderMode::Replicate, 0.)?;
+    let cropped = padded.copy_cut_border(1, 1, 1, 1)?;
+    println!(
+        "padded {}x{}, cropped {}x{}",
+        padded.info().w,
+        padded.info().h,
+        cropped.info().w,
+        cropped.info().h
+    );
+    let frame = [10u8, 20, 30, 40, 50, 60];
+    let patch = Mat::from_pixels_roi(&frame, PixelFormat::Gray, (3, 2), 3, (1, 1, 2, 1))?;
+    println!("patch: {:?}", patch.to_f32()?);
     Ok(())
 }

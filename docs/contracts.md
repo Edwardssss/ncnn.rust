@@ -25,7 +25,35 @@ The pinned native ownership audit covers these alias paths:
 
 Low-copy describes omission of the wrapper's final deep clone. A null native allocator or different data pointer does not prove output independence. Native extraction shallow-assigns cached tensors, including input-blob aliases; consuming a Rust input does not remove those native references. Final vectors copy logical values instead of certifying output independence from allocator identity. Independent native output storage requires explicit `detach` or `deep_clone`. The installed 20261020 `Extractor::extract` still performs type-0 unpacking, supported precision conversions and a default-allocator clone when the result uses the network's local blob pool. Packing, light mode and local-pool defaults are unchanged. Guard access does not promise pointer identity for computed outputs or bypass these native operations. Input-blob extraction can retain the transferred input pointer; padded channels still require channel views.
 
-Model files are trusted native input. The bounded binary reader limits reads to the supplied bytes and copies weights through `DataReader::read`. Text parameters use a terminated owned string. Safe file APIs use Rust paths and file reads on both platforms. The explicit unsafe `load_model_file_native` method calls the native narrow/wide path API and honors mapped loading; the caller keeps the file contents and length stable until the network is cleared or destroyed. Native allocation failure may terminate the process in upstream allocation paths.
+Model files are trusted native input. The `DataReader` handle owns a copy of the bytes and clamps every read to the bytes that remain, so a truncated stream ends early instead of reading past the buffer, and it also scans parameter text, which is how `load_param_reader` and `load_model_reader` reach the same native parsers as the byte APIs. Text parameters use a terminated owned string. Safe file APIs use Rust paths and file reads on both platforms. The explicit unsafe `load_model_file_native` method calls the native narrow/wide path API and honors mapped loading; the caller keeps the file contents and length stable until the network is cleared or destroyed. Native allocation failure may terminate the process in upstream allocation paths.
+
+## Borrowed inputs and zero copy
+
+`Mat::from_external` builds a native tensor over caller storage through the ncnn external
+constructors, which record no refcount and never free the buffer. `Extractor::input_borrowed` submits
+that tensor without a copy, and `Net::infer_borrowed` keeps the borrow inside one call: the tensors,
+the extractor and every native reference die before the function returns. Both unsafe entry points
+require the storage to stay alive, keep its length and stay free of mutable aliases until the
+extractor drops, because ncnn stores inputs by shallow assignment.
+
+ncnn clones the bottom tensor before an in-place layer whenever the cached storage is shared, so a
+borrowed input is read and not written. A test asserts that the caller slice is unchanged after an
+extraction, which is the observable form of that guarantee. The contract still requires exclusive
+borrows: the clone belongs to the native forward path rather than to the wrapper contract, so a
+future ncnn release may reach the buffer with a native writer.
+
+The safe alternative is `Extractor::input`, which copies raw-adopted storage and is the form to use
+when a tensor outlives the request or is shared between extractors.
+
+## Graph description
+
+`Net::layers` and `Net::blobs` read the loaded graph through the adapter and copy every string, so the
+result survives later loads and extraction. Both calls require loaded parameters and weights, because
+the parameter text alone does not fix the layer instances. `LayerInfo` reports the registered type
+index, the blob counts on both sides and the support flags ncnn declares for a layer type; those flags
+describe the type rather than the kernel a graph selects at run time. `BlobInfo` reports the wiring,
+the recorded shape and `has_shape`, and the extents stay at zero until a graph resize or an input
+fixes the shape.
 
 ## Tensors
 
@@ -52,6 +80,20 @@ also serves Vulkan networks, whose extraction downloads into network-owned CPU s
 that copy from the pool allocator.
 
 Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
+
+`fill` and `normalize_in_place` write through the tensor, so they accept only storage this crate
+owns: an adopted raw handle or an external buffer is refused with `Error::Invalid`, and `deep_clone`
+produces a writable copy. The rule keeps a caller-managed allocation out of reach of a native writer.
+
+`to_pixels` and `to_pixels_resize` write interleaved bytes into a caller buffer and require one
+unpacked FP32 single-batch plane per channel, a stride of at least one row and a buffer of
+`stride * height` bytes, so a wider stride keeps its remaining bytes untouched. `from_pixels_roi` and
+`from_pixels_roi_resize` read one rectangle of a frame and validate the image size, the stride and the
+rectangle before the native call; `from_pixels_roi_resize` runs the crop and the bilinear resize in a
+single native pass. `copy_make_border` and `copy_cut_border` run the native padding and crop kernels,
+require a 2-D or 3-D unpacked single-batch tensor and reject a border that leaves no rows or columns.
+The native border copy returns no status, so the wrapper checks the arguments up front and reports an
+empty result as `Error::Native`.
 
 ## Advanced resources
 
