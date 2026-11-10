@@ -145,6 +145,13 @@ the same confirmation the allocator table gives. `cargo run --release -p ncnn-ru
 heap_retention` prints both figures; the call reports `false` on targets whose heap has no such
 setting, so the figures there differ only by host noise.
 
+The thresholds are glibc settings, and the same buffer pattern shows why Windows needs none of them.
+The example also prints `buffer_pair_ns`, the cost of allocating and freeing two output-sized
+buffers per round without a network: 203 us on the WSL2 guest above, and 15 to 24 us on the Windows
+host next to the recorded tables, where the heap serves the pattern from committed pages and faults
+almost nothing. `heap::retain_pages` therefore reports `false` on Windows, and the crate's own test
+asserts both halves of that claim on whichever host runs the suite.
+
 ## Linux hosts
 
 A Linux run of the same request-path modes on a WSL2 Debian guest (8 vCPU AMD Ryzen 7 5800H, glibc

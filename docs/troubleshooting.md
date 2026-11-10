@@ -91,6 +91,25 @@ the Vulkan result, so the message names the operation and leaves the cause on st
 still alive and the network stay usable after a refusal. Long sessions that cannot attribute a
 failure re-create the device and its allocator, because a lost device reports the same code.
 
+## The Vulkan suite aborts on a physical GPU
+
+**Symptom:** `cargo test --features vulkan` with `NCNN_TEST_DEVICE=vulkan` reports a group of cases
+as failed and then aborts with an access violation (`0xC0000005`), while the same suite passes on a
+software device and passes again on the same machine after a rerun.
+
+**Cause:** the process ended before a wrapper call could return an error, so the abort is inside the
+driver rather than in a status code the crate reports. The recorded campaign ruled out the two
+wrapper-side causes: peak device memory over a passing run was 1.3 GB of a 6 GB device, of which the
+suite itself held tens of megabytes, and four suites run concurrently on the same device passed. The
+same abort reproduced on the commit before the change under measurement, so no wrapper path
+introduced it.
+
+**Fix:** rerun. A crashed run leaves the driver and its caches in an unknown state, and the next run
+starts from a fresh process. A case that fails on its own is a device or driver limitation and
+`--test-threads=1` separates it from an interaction. The conformance suite creates one device per
+test binary instead of one per worker thread, which keeps a single native device path whatever the
+thread count.
+
 ## Outputs come back as errors instead of values
 
 **Symptom:** `infer` or `extract_owned` fails with a message about 32-bit storage.
@@ -132,7 +151,10 @@ raise the same thresholds instead:
 MALLOC_MMAP_THRESHOLD_=67108864 MALLOC_TRIM_THRESHOLD_=-1 ./my-inference-server
 ```
 
-Windows hosts declare a drop-in allocator:
+Windows needs neither: its heap serves the same two-buffer pattern from committed pages and faults
+almost nothing, and it exposes no equivalent threshold, so `heap::retain_pages` reports `false`
+there. A Windows application that still measures allocation-bound owned requests declares a drop-in
+allocator:
 
 ```rust
 #[global_allocator]

@@ -45,9 +45,13 @@ library upgrade is a minor change of this crate.
   `heap::set_mapping_limit`, `heap::disable_trimming` and `heap::retain_pages_up_to` set the two
   thresholds individually, and every function reports whether the heap accepted them, so portable
   code calls the preset and ignores a `false` on other targets. The crate applies the settings
-  itself because a service cannot always set the environment of its own process.
+  itself because a service cannot always set the environment of its own process. The Windows heap
+  needs no threshold and exposes none, so the call reports `false` there, and the heap test asserts
+  both hosts: the faults and their removal on glibc, the absent faults and the `false` result on
+  Windows.
 - `crates/ncnn/examples/heap_retention.rs` prints the owned-output and reused-buffer figures before
-  and after that call, and CI runs it next to the allocator example.
+  and after that call plus the raw two-buffer cost of the host, and CI runs it next to the allocator
+  example.
 - `Net::option` reads the option value a loaded network actually uses.
 - Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
   `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border` and the
@@ -99,6 +103,10 @@ library upgrade is a minor change of this crate.
   match the C API, and the forms that return independent storage pay a page fault for every output
   page, because glibc maps an output-sized buffer per request and returns it to the kernel on free.
   The troubleshooting entry names the mapping thresholds that keep those pages.
+- The conformance suite resolves its Vulkan device once per test binary instead of once per worker
+  thread, so a GPU run touches one native device path whatever the test thread count. The
+  troubleshooting page records the Windows abort that no wrapper call can report, with the memory and
+  concurrency measurements that ruled out the wrapper as its cause.
 
 ## 0.2.0 - 2026-11-10
 

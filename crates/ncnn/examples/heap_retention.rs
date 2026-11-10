@@ -6,6 +6,9 @@
 //! two figures differ only by host noise. The reused-buffer form allocates no data buffer, so
 //! retention must not move it.
 //!
+//! The last figure measures the same buffer pattern without the network, two output-sized buffers
+//! allocated and freed per round, so a host shows its own heap behaviour next to the request paths.
+//!
 //! Run it with `cargo run --release -p ncnn-rust --example heap_retention`.
 
 use ncnn_rust::{heap, Mat, Net};
@@ -16,24 +19,30 @@ const GRAPH: &str = "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input ou
 const ELEMENTS: usize = 65536;
 const ITERATIONS: usize = 200;
 
-fn owned(net: &Net, values: &[f32]) -> f32 {
+fn owned(net: &Net, values: &[f32]) {
     let output = net
         .infer(
             [("input", Mat::from_f32(values, &[values.len()]).unwrap())],
             &["output"],
         )
         .unwrap();
-    black_box(output[0].values[0])
+    black_box(output[0].values[0]);
 }
 
-fn fused(net: &Net, values: &[f32], buffer: &mut Vec<f32>) -> f32 {
+fn fused(net: &Net, values: &[f32], buffer: &mut Vec<f32>) {
     let ranges = net
         .infer_borrowed_into(&[("input", values, &[values.len()])], &["output"], buffer)
         .unwrap();
-    black_box(buffer[ranges[0].values.clone()][0])
+    black_box(buffer[ranges[0].values.clone()][0]);
 }
 
-fn timed(mut body: impl FnMut() -> f32) -> f64 {
+fn buffer_pair() {
+    let first = vec![1.0f32; ELEMENTS];
+    let second = vec![2.0f32; ELEMENTS];
+    black_box(first[ELEMENTS - 1] + second[ELEMENTS - 1]);
+}
+
+fn timed(mut body: impl FnMut()) -> f64 {
     let start = Instant::now();
     for _ in 0..ITERATIONS {
         body();
@@ -42,7 +51,7 @@ fn timed(mut body: impl FnMut() -> f32) -> f64 {
 }
 
 /// The host keeps moving, so each metric is the minimum of three rounds.
-fn best(mut body: impl FnMut() -> f32) -> f64 {
+fn best(mut body: impl FnMut()) -> f64 {
     let mut best = f64::MAX;
     for _ in 0..3 {
         best = best.min(timed(&mut body));
@@ -64,10 +73,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let retained = heap::retain_pages();
     let owned_after = best(|| owned(&net, &values));
     let fused_after = best(|| fused(&net, &values, &mut buffer));
+    let pair = best(buffer_pair);
 
     println!(
         "heap_retention={retained}, elements={ELEMENTS}, owned_before_ns={owned_before:.0}, \
-         owned_after_ns={owned_after:.0}, fused_before_ns={fused_before:.0}, fused_after_ns={fused_after:.0}"
+         owned_after_ns={owned_after:.0}, fused_before_ns={fused_before:.0}, \
+         fused_after_ns={fused_after:.0}, buffer_pair_ns={pair:.0}"
     );
     Ok(())
 }
+

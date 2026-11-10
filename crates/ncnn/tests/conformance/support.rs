@@ -120,30 +120,29 @@ fn attach_device(builder: NetBuilder) -> NetBuilder {
 #[cfg(feature = "vulkan")]
 mod device {
     use ncnn_rust::gpu::Device;
-    use std::cell::RefCell;
+    use std::sync::OnceLock;
 
-    thread_local! {
-        static DEVICE: RefCell<Option<Device>> = const { RefCell::new(None) };
-    }
+    static DEVICE_INDEX: OnceLock<Option<usize>> = OnceLock::new();
 
     /// Returns the device named by `NCNN_TEST_DEVICE=vulkan`, if any.
     ///
     /// The suite runs the same cases on the GPU when the variable is set, which is how
-    /// the Vulkan job repeats every operator and graph on the software device.
+    /// the Vulkan job repeats every operator and graph on the software device. The selection runs
+    /// once per test binary, so every worker thread resolves the same device through one native
+    /// initialization path.
     pub fn requested() -> Option<Device> {
-        let requested = std::env::var("NCNN_TEST_DEVICE")
-            .map(|value| value.eq_ignore_ascii_case("vulkan"))
-            .unwrap_or(false);
-        if !requested {
-            return None;
-        }
-        DEVICE.with(|slot| {
-            Some(
-                slot.borrow_mut()
-                    .get_or_insert_with(|| Device::default_device().expect("default Vulkan device"))
-                    .clone(),
-            )
-        })
+        let selected = DEVICE_INDEX.get_or_init(|| {
+            let requested = std::env::var("NCNN_TEST_DEVICE")
+                .map(|value| value.eq_ignore_ascii_case("vulkan"))
+                .unwrap_or(false);
+            if !requested {
+                return None;
+            }
+            let device = Device::default_device().expect("default Vulkan device");
+            Some(device.info().index)
+        });
+        let index = (*selected)?;
+        Some(Device::new(index).expect("Vulkan device"))
     }
 }
 

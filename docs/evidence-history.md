@@ -47,6 +47,23 @@ vulkan` passed the 52 conformance cases, the four Vulkan contracts, the heap ret
 example printed the device line, `[5.0, 7.0, 9.0]` from a resident upload, and the pool allocator as
 32 bytes live against a 48-byte high-water mark.
 
+## Windows heap and Vulkan runs
+
+The same heap probe on the Windows host that produced the allocator tables: two distinct 256 KB
+buffers allocated and freed per round cost 15 to 24 us and fault almost no pages, against 203 us and
+96 faults per round on the WSL2 guest, so the glibc thresholds address a mechanism the Windows heap
+does not have. The crate reports the settings as unavailable there, and `cargo test --test heap` on
+that host asserts both the absent faults and the `false` results.
+
+Full Vulkan conformance runs on the Windows device (GeForce RTX 3060 Laptop, 6 GB, driver 596.49)
+passed 52 of 52 cases at 1, 2, 8 and 16 test threads, six runs in a row, and four suites run
+concurrently all passed. During a passing run `nvidia-smi` reported 1293 MiB of the device in use,
+of which 1241 MiB came from other applications, so the suite held tens of megabytes. Three earlier
+runs in the same session aborted with an access violation after reporting about half the cases as
+failed; the same abort reproduced on the commit before the change under measurement, and no
+subsequent run reproduced it. The observation is recorded with the ruled-out causes on the
+[troubleshooting page](troubleshooting.md#the-vulkan-suite-aborts-on-a-physical-gpu).
+
 ## Windows Vulkan hardware
 
 Ryzen 7 5800H, GeForce RTX 3060 Laptop GPU, NVIDIA driver 596.49, Rust 1.96.1, CMake 4.2.1, MSVC

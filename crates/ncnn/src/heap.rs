@@ -11,6 +11,12 @@
 //! that `docs/performance.md` records, and it exists because a service cannot always set the
 //! environment of its own process.
 //!
+//! The thresholds are glibc settings. The Windows heap serves the same pattern from committed pages
+//! and faults almost nothing, and its public API exposes no equivalent threshold, so every function
+//! here reports `false` on that target and leaves the heap alone. `crates/ncnn/tests/heap.rs`
+//! measures both hosts: it proves the faults and their removal on glibc, and asserts the absence of
+//! the faults and the `false` result on Windows.
+//!
 //! The setting is process-wide and holds for the rest of the run, like a global allocator, so an
 //! application calls it once at start-up. Reusing a buffer through
 //! [`Net::infer_into`](crate::Net::infer_into) or
