@@ -104,3 +104,25 @@ when the pipeline stores FP32.
 let outputs = net.infer_stored([("input", input)], &["output"])?;
 let bytes = outputs[0].1.to_i8()?;
 ```
+
+## Owned-output requests are far slower than the C API
+
+**Symptom:** `infer`, `extract_owned` or `infer_stored` cost several times more than the same request
+through the C API, while `infer_into`, `infer_borrowed_into` and `extract` are at native parity or
+faster.
+
+**Cause:** those forms return independent storage, so every request allocates an output-sized buffer
+and frees it again. On Windows the default process heap is much slower than a thread-caching allocator
+for that allocate-and-free cycle; the copy itself is not the cost.
+
+**Fix:** either reuse a buffer, which removes the allocation entirely, or declare a drop-in allocator
+in the application:
+
+```rust
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+```
+
+The [performance page](performance.md#allocator-choice) records both figures and the example in
+`crates/ncnn/examples/fast_allocator.rs` reproduces them. A library cannot set the global allocator
+for its caller, so this is an application decision.

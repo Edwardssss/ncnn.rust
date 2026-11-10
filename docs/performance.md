@@ -112,6 +112,24 @@ measurement of a 256 KB `Vec` copy on the same host reported 77 to 108 us, the s
 inference, so the owned-output form is dominated by allocator and memory behaviour rather than by the
 wrapper.
 
+## Allocator choice
+
+The wrapper never sets an allocator for its caller, so an application chooses one. The choice matters
+for the forms that return independent storage, because each request allocates and frees an
+output-sized buffer. The same code with and without a thread-caching allocator, 65536 FP32 elements on
+one Windows host, minimum of three rounds:
+
+| Measurement | system heap | `mimalloc` |
+|---|---:|---:|
+| owned-output request (`infer`) | 321679 ns | 36711 ns |
+| borrowed-input, reused-buffer request | 32330 ns | 27832 ns |
+| plain 256 KB `Vec` clone | 12142 ns | 5420 ns |
+
+The owned-output form drops by roughly eight times, and the form that allocates no data buffer does
+not move, which is the confirmation that the cost is the allocate-and-free cycle rather than the
+wrapper. `cargo run --release -p ncnn-rust --example fast_allocator` prints the same two figures with
+the allocator declared; remove the `#[global_allocator]` line to measure the system heap.
+
 ## Reproducing
 
 The tables come from a campaign harness that is maintained outside this repository. In-repo

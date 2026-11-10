@@ -19,6 +19,8 @@ library upgrade is a minor change of this crate.
   ncnn encodes.
 - Zero-copy input: `Mat::from_external` borrows caller storage, `Extractor::input_borrowed` submits it
   without a copy and `Net::infer_borrowed` bounds the borrow to one request.
+  `Net::infer_borrowed_into` fuses that with the reusable output buffer, which is the request form
+  that allocates no data buffers.
 - Consuming tensor helpers that keep the storage a tensor already owns: `Mat::into_reshape` rewrites
   the header instead of duplicating aliased storage, and `Mat::into_normalized` normalizes in place
   instead of copying first.
@@ -35,6 +37,9 @@ library upgrade is a minor change of this crate.
   cover the affine preprocessing path.
 - `Options::set_blob_allocator`, `Options::set_workspace_allocator` and
   `Options::set_kvcache_allocator` attach caller-owned pools to a network.
+- `crates/ncnn/examples/fast_allocator.rs` measures the request path with a drop-in allocator, and the
+  performance page records what it changes: on Windows the owned-output form is dominated by the
+  process heap, while the forms that reuse a buffer do not move.
 - `Net::option` reads the option value a loaded network actually uses.
 - Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
   `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border` and the
@@ -58,6 +63,9 @@ library upgrade is a minor change of this crate.
 - `DataReader::from_bytes` builds a bounded memory reader: a read is clamped to the bytes that
   remain instead of failing, and the same handle scans parameter text, which the reader-based
   loaders rely on.
+- A borrowed input now returns `Error::Invalid` when the network runs with light mode. The native
+  forward path reads the storage refcount before an in-place layer may write, and an external tensor
+  has none, so the previous combination reached a native null read; owned input is unaffected.
 - The fuzz target also feeds the binary parameter loader and the reader loaders.
 - The coverage job writes an lcov with per-line records, prints the summary, fails below 85 percent
   line coverage, and rejects a report without `DA` records.

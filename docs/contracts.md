@@ -38,9 +38,16 @@ unsafe because the mapping has to outlive the network. Safe file APIs use Rust p
 `Mat::from_external` builds a native tensor over caller storage through the ncnn external
 constructors, which record no refcount and never free the buffer. `Extractor::input_borrowed` submits
 that tensor without a copy, and `Net::infer_borrowed` keeps the borrow inside one call: the tensors,
-the extractor and every native reference die before the function returns. Both unsafe entry points
-require the storage to stay alive, keep its length and stay free of mutable aliases until the
-extractor drops, because ncnn stores inputs by shallow assignment.
+the extractor and every native reference die before the function returns.
+`Net::infer_borrowed_into` adds the reusable output buffer, so a steady-state request allocates no data
+buffers in either direction. Both unsafe entry points require the storage to stay alive, keep its
+length and stay free of mutable aliases until the extractor drops, because ncnn stores inputs by
+shallow assignment.
+
+A borrowed input requires light mode to be off. The native forward path reads the storage refcount
+before it lets an in-place layer write, and an external tensor has no such counter, so the wrapper
+rejects the combination with `Error::Invalid` instead of reaching that read. Owned input keeps working
+under light mode, because transferred storage carries a refcount.
 
 ncnn clones the bottom tensor before an in-place layer whenever the cached storage is shared, so a
 borrowed input is read and not written. A test asserts that the caller slice is unchanged after an
