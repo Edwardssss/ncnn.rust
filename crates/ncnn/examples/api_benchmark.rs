@@ -90,8 +90,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "resolved-reused"
             | "gpu-transfer"
             | "gpu-resident"
+            | "preprocess"
     ) {
-        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, or gpu-resident".into());
+        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, gpu-resident, or preprocess".into());
     }
     let iterations: usize = args
         .get(2)
@@ -111,6 +112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return gpu_benchmark(mode, iterations, elements);
         #[cfg(not(feature = "vulkan"))]
         return Err("GPU modes require --features vulkan".into());
+    }
+    if mode == "preprocess" {
+        return preprocessing(iterations, elements);
     }
     let net = Net::builder()?
         .threads(1)?
@@ -147,6 +151,150 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(value) = status.lines().find(|line| line.starts_with("VmHWM:")) {
             println!("{value}");
         }
+    }
+    Ok(())
+}
+
+/// Times the tensor helpers that run per request, rotating the cases so a slow host warms every
+/// case the same way. Each line is one median, which is what the performance page records.
+#[allow(clippy::type_complexity)]
+fn preprocessing(iterations: usize, elements: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let values: Vec<f32> = (0..elements)
+        .map(|index| (index % 251) as f32 / 64.)
+        .collect();
+    let mean = [127.5f32; 3];
+    let norm = [0.017f32; 3];
+    let channel: Vec<f32> = (0..elements).map(|index| (index % 255) as f32).collect();
+    let owned = Mat::from_f32(&channel, &[elements])?;
+    let mut scratch = Mat::from_f32(&channel, &[elements])?;
+
+    let side = ((elements / 3) as f64).sqrt().floor().max(2.) as usize;
+    let pixels: Vec<u8> = (0..side * side * 3)
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let identity = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let field = Mat::from_f32(&channel[..side * side * 3], &[side, side, 3])?;
+    let mut image = vec![0u8; side * side * 3];
+
+    let mut cases: Vec<(&str, Box<dyn FnMut() -> ncnn::Result<()>>)> = vec![
+        (
+            "borrow",
+            Box::new(|| {
+                let tensor = unsafe { Mat::from_external(&values, &[elements])? };
+                black_box(tensor.info().w);
+                Ok(())
+            }),
+        ),
+        (
+            "deep-clone",
+            Box::new(|| {
+                black_box(owned.deep_clone()?.info().w);
+                Ok(())
+            }),
+        ),
+        (
+            "reshape-independent",
+            Box::new(|| {
+                black_box(owned.reshape(&[elements])?.info().w);
+                Ok(())
+            }),
+        ),
+        (
+            "reshape-consuming",
+            Box::new(|| {
+                let tensor = unsafe { Mat::from_external(&values, &[elements])? };
+                black_box(tensor.into_reshape(&[elements])?.info().w);
+                Ok(())
+            }),
+        ),
+        (
+            "normalize-copy",
+            Box::new(|| {
+                black_box(owned.normalized(&mean[..1], &norm[..1])?.info().w);
+                Ok(())
+            }),
+        ),
+        (
+            "normalize-in-place",
+            Box::new(|| {
+                scratch.normalize_in_place(&mean[..1], &norm[..1])?;
+                Ok(())
+            }),
+        ),
+        (
+            "flatten",
+            Box::new(|| {
+                black_box(owned.flatten()?.info().w);
+                Ok(())
+            }),
+        ),
+        (
+            "packing",
+            Box::new(|| {
+                black_box(owned.with_packing(4)?.info().elempack);
+                Ok(())
+            }),
+        ),
+        (
+            "border",
+            Box::new(|| {
+                black_box(
+                    field
+                        .copy_make_border(1, 1, 1, 1, ncnn::BorderMode::Replicate, 0.)?
+                        .info()
+                        .w,
+                );
+                Ok(())
+            }),
+        ),
+        (
+            "warp-affine",
+            Box::new(|| {
+                black_box(ncnn::image::warp_affine(
+                    &pixels,
+                    (side, side),
+                    3,
+                    (side, side),
+                    &identity,
+                    ncnn::image::WarpBorder::Replicate,
+                    0,
+                )?);
+                Ok(())
+            }),
+        ),
+        (
+            "to-pixels",
+            Box::new(|| {
+                field.to_pixels(ncnn::PixelFormat::Rgb, side * 3, &mut image)?;
+                Ok(())
+            }),
+        ),
+    ];
+
+    const ROUNDS: usize = 5;
+    let mut samples: Vec<Vec<f64>> = vec![Vec::new(); cases.len()];
+    for (_, body) in cases.iter_mut() {
+        for _ in 0..20 {
+            body()?;
+        }
+    }
+    for round in 0..ROUNDS {
+        for offset in 0..cases.len() {
+            let index = (offset + round) % cases.len();
+            let start = Instant::now();
+            for _ in 0..iterations {
+                cases[index].1()?;
+            }
+            samples[index].push(start.elapsed().as_secs_f64() * 1e6 / iterations as f64);
+        }
+    }
+    for (index, (name, _)) in cases.iter().enumerate() {
+        let mut rounds = samples[index].clone();
+        rounds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!(
+            "preprocess={name}, elements={elements}, iterations={iterations}, rounds={ROUNDS}, median_us={:.3}",
+            rounds[rounds.len() / 2]
+        );
     }
     Ok(())
 }

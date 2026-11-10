@@ -245,6 +245,7 @@ fn operator_regression(root: &Path, executable: &Path) -> Result<()> {
                 let bits = probe_storage(&net, &input, &native)?;
                 assert!(matches!(bits, 16 | 32));
                 let (max_error, current) = check_runs(&net, &input, &native.outputs, true)?;
+                let batch_error = check_batched(&net, &values, &[8, height, 3], &native.outputs)?;
                 if height == 2 {
                     if let Some((old, values)) = &retained {
                         assert_eq!(old.values, *values);
@@ -254,7 +255,7 @@ fn operator_regression(root: &Path, executable: &Path) -> Result<()> {
                         retained = Some((current, values));
                     }
                 }
-                println!("{name}: shape=8x{height}x3, profile={profile}, packing={packing}, storage_bits={bits}, 3 outputs, native max absolute error={max_error}, guarded=detached");
+                println!("{name}: shape=8x{height}x3, profile={profile}, packing={packing}, storage_bits={bits}, 3 outputs, native max absolute error={max_error}, guarded=detached, batch2 max absolute error={batch_error}");
             }
         }
         net.clear();
@@ -369,6 +370,57 @@ fn check_runs(
         }
     }
     Ok((max_error, detached.unwrap()))
+}
+
+fn check_batched(
+    net: &Net,
+    values: &[f32],
+    dimensions: &[usize],
+    native: &[Reference],
+) -> Result<f32> {
+    let doubled: Vec<f32> = values.iter().chain(values.iter()).copied().collect();
+    let batched = Mat::from_f32_batch(&doubled, dimensions, 2)?;
+    let input_name = net.input_names().remove(0);
+    let mut ex = net.extractor()?;
+    ex.input(input_name.as_str(), batched)?;
+    let mut max_error = 0f32;
+    for expected in native {
+        let output = ex.extract_owned(&expected.name)?;
+        let info = output.info;
+        assert_eq!(info.n, 2, "{}: batch count", expected.name);
+        let layout = [
+            info.dims as u64,
+            info.w as u64,
+            info.h as u64,
+            info.d as u64,
+            info.c as u64,
+            1,
+            info.elempack as u64,
+            info.elemsize as u64,
+            info.cstep as u64,
+        ];
+        assert_eq!(layout, expected.layout, "{}: layout", expected.name);
+        let unit = expected.values.len();
+        assert_eq!(
+            output.values.len(),
+            unit * 2,
+            "{}: batch length",
+            expected.name
+        );
+        for batch in 0..2 {
+            let slice = &output.values[batch * unit..(batch + 1) * unit];
+            for (element, (&actual, &native)) in slice.iter().zip(&expected.values).enumerate() {
+                let error = (actual - native).abs();
+                assert!(
+                    error <= 1e-5 + 1e-4 * native.abs(),
+                    "{} batch {batch} [{element}]: Rust={actual}, C++={native}",
+                    expected.name
+                );
+                max_error = max_error.max(error);
+            }
+        }
+    }
+    Ok(max_error)
 }
 
 fn main() -> Result<()> {
