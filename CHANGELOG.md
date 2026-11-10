@@ -14,6 +14,22 @@ library upgrade is a minor change of this crate.
   recorded shape of every blob.
 - Zero-copy input: `Mat::from_external` borrows caller storage, `Extractor::input_borrowed` submits it
   without a copy and `Net::infer_borrowed` bounds the borrow to one request.
+- Consuming tensor helpers that keep the storage a tensor already owns: `Mat::into_reshape` rewrites
+  the header instead of duplicating aliased storage, and `Mat::into_normalized` normalizes in place
+  instead of copying first.
+- Batched tensors: `Mat::from_f32_batch` builds storage with a batch count above one, `TensorInfo::n`
+  reports it and `Mat::to_f32` reads the batches back.
+- Layout helpers `Mat::flatten` and `Mat::with_packing`, and the four-axis border helpers
+  `Mat::copy_make_border_3d` and `Mat::copy_cut_border_3d` with the `Borders` argument.
+- `DataReader::from_file` streams a file through the native stdio reader, and the file loaders
+  `Net::load_param_file` and `Net::load_model_file` now read natively instead of copying the file
+  into a Rust buffer first.
+- `Device::pipeline_cache` and `Device::set_pipeline_cache` move the serialized Vulkan pipeline cache
+  through memory, next to the existing path helpers.
+- `image::affine_transform`, `image::invert_affine`, `image::warp_affine` and `image::WarpBorder`
+  cover the affine preprocessing path.
+- `Options::set_blob_allocator`, `Options::set_workspace_allocator` and
+  `Options::set_kvcache_allocator` attach caller-owned pools to a network.
 - `Net::option` reads the option value a loaded network actually uses.
 - Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
   `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border` and the
@@ -26,6 +42,11 @@ library upgrade is a minor change of this crate.
 
 ### Changed
 
+- `Mat::normalize_in_place` applies the same per-channel view as `Mat::normalized`, so both forms
+  agree on tensors below three dimensions, which the native call otherwise treats as per-row
+  coefficients.
+- `Mat::flatten` returns unpacked storage, so its result reads through `Mat::to_f32` without a typed
+  conversion.
 - `DataReader::from_bytes` builds a bounded memory reader: a read is clamped to the bytes that
   remain instead of failing, and the same handle scans parameter text, which the reader-based
   loaders rely on.

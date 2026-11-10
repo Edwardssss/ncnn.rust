@@ -12,6 +12,9 @@ Project adapter names use `ncnn_rs_`. The adapter compiles against the selected 
 
 - Extractor option assignment in this release is a no-op, so the safe API exposes no per-extractor override; a different option set needs its own network. High-level configuration applies to the network before loading.
 - Layer and blob fields reach Rust through `ncnn_rs_net_layer_info`, `ncnn_rs_net_blob_count` and `ncnn_rs_net_blob_info`. The adapter copies the fields of one layer or blob into a single call and returns the names as pointers into the network's own objects, which the wrapper copies before the network can change.
+- `ncnn_rs_net_load_file` owns the mapped-loading switch, so the safe file loaders read through stdio while the mapped path stays an explicit unsafe opt-in. It widens a UTF-8 path on Windows, because the narrow native loaders cannot open a non-ASCII path there.
+- `ncnn_rs_mat_flatten` disables the packing layout for the call, because the native kernel would otherwise return a packed one-dimensional tensor that the plain FP32 readers cannot read.
+- `ncnn_rs_mat_normalize_in_place` applies the same channel view as `ncnn_rs_mat_normalized`, so the copying and the in-place form normalize below three dimensions identically.
 - C extraction creates an output handle on failure. Rust releases it before returning an error.
 - The C Mat-array ModelBin constructor passes a temporary vector's storage to a retaining reader. The project adapter owns its vector.
 - The built-in layer C load-model callback treats a C handle as a C++ ModelBin object. The project adapter unwraps `pthis` explicitly.

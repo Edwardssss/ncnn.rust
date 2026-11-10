@@ -25,7 +25,13 @@ The pinned native ownership audit covers these alias paths:
 
 Low-copy describes omission of the wrapper's final deep clone. A null native allocator or different data pointer does not prove output independence. Native extraction shallow-assigns cached tensors, including input-blob aliases; consuming a Rust input does not remove those native references. Final vectors copy logical values instead of certifying output independence from allocator identity. Independent native output storage requires explicit `detach` or `deep_clone`. The installed 20261020 `Extractor::extract` still performs type-0 unpacking, supported precision conversions and a default-allocator clone when the result uses the network's local blob pool. Packing, light mode and local-pool defaults are unchanged. Guard access does not promise pointer identity for computed outputs or bypass these native operations. Input-blob extraction can retain the transferred input pointer; padded channels still require channel views.
 
-Model files are trusted native input. The `DataReader` handle owns a copy of the bytes and clamps every read to the bytes that remain, so a truncated stream ends early instead of reading past the buffer, and it also scans parameter text, which is how `load_param_reader` and `load_model_reader` reach the same native parsers as the byte APIs. Text parameters use a terminated owned string. Safe file APIs use Rust paths and file reads on both platforms. The explicit unsafe `load_model_file_native` method calls the native narrow/wide path API and honors mapped loading; the caller keeps the file contents and length stable until the network is cleared or destroyed. Native allocation failure may terminate the process in upstream allocation paths.
+Model files are trusted native input. The `DataReader` handle either owns a copy of the bytes or
+owns an open file, clamps every read to the bytes that remain, and scans parameter text, which is how
+`load_param_reader` and `load_model_reader` reach the same native parsers as the byte APIs. The file
+reader keeps the file open until it drops. `load_param_file` and `load_model_file` hand the path to
+the native stdio loaders, so a model never passes through a Rust buffer and the peak allocation stays
+at the per-layer copies ncnn keeps. `load_model_file_native` opts into mapped loading and stays
+unsafe because the mapping has to outlive the network. Safe file APIs use Rust paths and file reads on both platforms. The explicit unsafe `load_model_file_native` method calls the native narrow/wide path API and honors mapped loading; the caller keeps the file contents and length stable until the network is cleared or destroyed. Native allocation failure may terminate the process in upstream allocation paths.
 
 ## Borrowed inputs and zero copy
 
@@ -82,9 +88,18 @@ that copy from the pool allocator.
 
 Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
 
-`fill` and `normalize_in_place` write through the tensor, so they accept only storage this crate
-owns: an adopted raw handle or an external buffer is refused with `Error::Invalid`, and `deep_clone`
-produces a writable copy. The rule keeps a caller-managed allocation out of reach of a native writer.
+`fill`, `normalize_in_place` and `into_normalized` write through the tensor, so they accept only
+storage this crate owns: an adopted raw handle or an external buffer is refused with `Error::Invalid`,
+and `deep_clone` produces a writable copy. The rule keeps a caller-managed allocation out of reach of
+a native writer. `into_normalized` and `into_reshape` consume the tensor, which is what makes the
+mutation sound: no other reference to the storage exists afterwards, so the native call runs on it
+instead of on a duplicate. `normalize_in_place` applies the same per-channel view as `normalized`, so
+both forms agree on tensors below three dimensions.
+
+A batched tensor stores `n > 1` planes per channel. Construction, `TensorInfo::n` and the copying
+readers cover the batch count; the arithmetic helpers, normalization and reshape stay single batch.
+Layers without `support_batch` still run, because ncnn splits the batch and joins the result, so a
+batched request is a throughput decision rather than a graph restriction.
 
 `to_pixels` and `to_pixels_resize` write interleaved bytes into a caller buffer and require one
 unpacked FP32 single-batch plane per channel, a stride of at least one row and a buffer of
@@ -99,7 +114,7 @@ empty result as `Error::Native`.
 
 `Layer` owns its pipeline options and attempts pipeline destruction before destroying its handle. Parameter loading, weight loading, and execution are unsafe because each layer has its own tensor and parameter contract. ModelBin and reader handles retain their owned backing storage. A ModelBin cursor is consumed by native loading; callers provide the number and formats of weights expected by the layer.
 
-`PoolAllocator` provides RAII ownership for advanced FFI use. Objects allocated through its raw handle are released before the allocator. Custom-layer creators, destroyers, callbacks, and userdata remain available through `sys`; contexts remain alive until all native users are destroyed. Callback implementations contain Rust panics and satisfy upstream output ownership rules.
+`PoolAllocator` provides RAII ownership for advanced FFI use. Objects allocated through its raw handle are released before the allocator. `Options` can attach one pool for intermediate blobs, workspace or the attention KV cache, and those setters are unsafe because the native option block stores the handle without taking ownership: the pool must outlive every network configured from that block and must not be shared with a concurrent network. Custom-layer creators, destroyers, callbacks, and userdata remain available through `sys`; contexts remain alive until all native users are destroyed. Callback implementations contain Rust panics and satisfy upstream output ownership rules.
 
 The wrapper types remain thread-affine. Native runtime queries are separate from object sharing. CPU worker-affinity changes and raw callback synchronization remain application-managed advanced operations. OS processor identities are value types. Current-thread affinity acts on the caller only, with a group-local mask on Windows; native worker masks retain their upstream capacity and scheduling semantics.
 

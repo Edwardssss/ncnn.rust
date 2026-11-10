@@ -48,17 +48,22 @@ submission and fence wait, which both paths perform.
 
 Median microseconds:
 
-| Operation | native | ncnn-rust |
-|---|---:|---:|
-| create and copy | 6.022 | 7.043 |
-| RGB conversion | 75.769 | 79.125 |
-| clone and normalize | 12.958 | 28.366 |
-| reshape | 7.221 | 16.892 |
-| RGB conversion and resize | 107.121 | 103.260 |
+| Operation | native in place or shared | native independent storage | ncnn-rust |
+|---|---:|---:|---:|
+| create and copy | 6.022 | 6.022 | 7.043 |
+| RGB conversion | 75.769 | 75.769 | 79.125 |
+| clone and normalize | 12.958 | 26.618 | 28.366 |
+| reshape | 7.221 | 15.607 | 16.892 |
+| RGB conversion and resize | 107.121 | 107.121 | 103.260 |
 
-Normalization and reshape in `ncnn-rust` return independent storage; the native entry mutates or
-shares storage. Independent-storage references are 26.618 us for normalization and 15.607 us for
-reshape.
+Normalization and reshape in `ncnn-rust` return independent storage, so the matching native
+reference is the independent column; those rows sit within the campaign spread of it. The gap against
+the in-place column is the cost of one full-tensor copy, not wrapper overhead. A measurement of a
+`1x224x224x3` FP32 tensor on one host puts the normalization pass at 12 us, a copy of the same tensor
+at 43 to 50 us, and the copy plus the pass at 65 us, where the copy is dominated by the fresh
+allocation and its first touch rather than by the arithmetic. `Mat::normalize_in_place` and
+`Mat::into_normalized` reach the in-place figure for storage the caller owns, and `Mat::into_reshape`
+returns the aliasing reshape for the cost of a header update.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
