@@ -4,7 +4,6 @@
 
 use ncnn_rust::{DataReader, Endpoint, Mat, Net, ParamDict};
 use std::io::Cursor;
-
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
 
 fn sum_net() -> Net {
@@ -423,4 +422,209 @@ fn type_index_registration_rejects_incomplete_factories() {
     let late =
         unsafe { loaded.register_custom_layer_by_typeindex(20, None, None, std::ptr::null_mut()) };
     assert!(late.is_err(), "registration happens before loading");
+}
+
+#[test]
+fn consuming_helpers_keep_the_storage_a_tensor_already_owns() {
+    let values = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = Mat::from_f32(&values, &[3, 2]).unwrap();
+    let reshaped = tensor.into_reshape(&[2, 3]).unwrap();
+    assert_eq!(reshaped.info().dims, 2);
+    assert_eq!((reshaped.info().w, reshaped.info().h), (2, 3));
+    assert_eq!(reshaped.to_f32().unwrap(), values);
+    let bad = Mat::from_f32(&values, &[3, 2])
+        .unwrap()
+        .into_reshape(&[4, 2]);
+    assert!(bad.is_err(), "the element count must match");
+
+    let normalized = Mat::from_f32(&[0.0; 6], &[3, 2])
+        .unwrap()
+        .into_normalized(&[1.0], &[2.0])
+        .unwrap();
+    assert_eq!(normalized.to_f32().unwrap(), [-2.0f32; 6]);
+
+    // Borrowed storage is copied first, so the caller keeps its values.
+    let borrowed = [4.0f32; 6];
+    let external = unsafe { Mat::from_external(&borrowed, &[3, 2]) }.unwrap();
+    let copied = external.into_normalized(&[1.0], &[2.0]).unwrap();
+    assert_eq!(copied.to_f32().unwrap(), [6.0f32; 6]);
+    assert_eq!(borrowed, [4.0f32; 6]);
+}
+
+#[test]
+fn batched_tensors_run_through_a_graph() {
+    let net = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(
+            "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+            &[],
+        )
+        .unwrap();
+    let values = [-1.0f32, 2.0, -3.0, 4.0, 5.0, -6.0];
+    let batched = Mat::from_f32_batch(&values, &[3], 2).unwrap();
+    assert_eq!(batched.info().n, 2);
+    assert_eq!(batched.to_f32().unwrap(), values);
+
+    let mut extractor = net.extractor().unwrap();
+    extractor.input("input", batched).unwrap();
+    let output = extractor.extract_owned("output").unwrap();
+    assert_eq!(output.info.n, 2, "the batch count survives the graph");
+    assert_eq!(output.values, [0., 2., 0., 4., 5., 0.]);
+
+    let short = Mat::from_f32_batch(&values[..5], &[3], 2);
+    assert!(short.is_err(), "the data has to cover every batch");
+}
+
+#[test]
+fn flatten_and_packing_rewrite_the_layout() {
+    let tensor = Mat::from_f32(
+        &(0..8).map(|value| value as f32).collect::<Vec<_>>(),
+        &[2, 2, 2],
+    )
+    .unwrap();
+    let flat = tensor.flatten().unwrap();
+    assert_eq!(flat.info().dims, 1);
+    assert_eq!(flat.info().w, 8);
+    assert_eq!(
+        flat.to_f32().unwrap(),
+        (0..8).map(|v| v as f32).collect::<Vec<_>>()
+    );
+
+    let packed = tensor.with_packing(2).unwrap();
+    assert_eq!(packed.info().elempack, 2);
+    assert_eq!(packed.info().c, 1, "two channels share one lane");
+    let mut lane_order = packed.to_f32_typed(ncnn_rust::ElementKind::F32).unwrap();
+    let mut plane_order = tensor.to_f32().unwrap();
+    lane_order.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    plane_order.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(lane_order, plane_order, "packing keeps every value");
+    let unpacked = packed.with_packing(1).unwrap();
+    assert_eq!(unpacked.info().elempack, 1);
+    assert_eq!(unpacked.to_f32().unwrap(), tensor.to_f32().unwrap());
+    assert!(
+        tensor.with_packing(3).is_err(),
+        "the packing has to divide the axis"
+    );
+    assert!(tensor.with_packing(0).is_err());
+}
+
+#[test]
+fn depth_borders_cover_the_fourth_axis() {
+    let values: Vec<f32> = (0..8).map(|value| value as f32).collect();
+    let tensor = Mat::from_f32(&values, &[2, 2, 2, 1]).unwrap();
+    assert_eq!(tensor.info().dims, 4);
+    let border = ncnn_rust::Borders::new(1, 0, 0, 1).with_depth(1, 0);
+    let padded = tensor
+        .copy_make_border_3d(border, ncnn_rust::BorderMode::Constant, -1.)
+        .unwrap();
+    assert_eq!(
+        (
+            padded.info().w,
+            padded.info().h,
+            padded.info().d,
+            padded.info().c
+        ),
+        (3, 3, 3, 1)
+    );
+    let cropped = padded.copy_cut_border_3d(border).unwrap();
+    assert_eq!(cropped.to_f32().unwrap(), values);
+    assert!(
+        cropped
+            .copy_cut_border_3d(ncnn_rust::Borders::new(0, 0, 0, 2))
+            .is_err(),
+        "the crop keeps one column"
+    );
+    assert!(
+        Mat::from_f32(&values, &[2, 2, 2])
+            .unwrap()
+            .copy_cut_border_3d(ncnn_rust::Borders::default())
+            .is_err(),
+        "the depth variant needs four axes"
+    );
+}
+
+#[test]
+fn readers_open_files_and_load_through_them() {
+    let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let parameters = directory.join("api-reader-file.param");
+    std::fs::write(&parameters, PARAM).unwrap();
+
+    let reader = DataReader::from_file(&parameters).unwrap();
+    let mut net = Net::new().unwrap();
+    net.load_param_reader(&reader).unwrap();
+    let weights = DataReader::from_bytes(&[]).unwrap();
+    net.load_model_reader(&weights).unwrap();
+    let (input_a, input_b) = operands();
+    let mut extractor = net.extractor().unwrap();
+    extractor.input("a", input_a).unwrap();
+    extractor.input("b", input_b).unwrap();
+    assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
+    assert!(
+        DataReader::from_file(directory.join("api-reader-file-missing.param")).is_err(),
+        "a missing file is reported"
+    );
+    // The reader keeps the file open, so the handle has to drop before the file can go.
+    drop(reader);
+    std::fs::remove_file(&parameters).unwrap();
+}
+
+#[test]
+fn allocator_options_attach_pools() {
+    let mut options = ncnn_rust::Options::new().unwrap();
+    let blobs = ncnn_rust::PoolAllocator::new().unwrap();
+    let workspace = ncnn_rust::PoolAllocator::new().unwrap();
+    let cache = ncnn_rust::PoolAllocator::new().unwrap();
+    unsafe {
+        options.set_blob_allocator(&blobs).unwrap();
+        options.set_workspace_allocator(&workspace).unwrap();
+        options.set_kvcache_allocator(&cache).unwrap();
+    }
+    let net = ncnn_rust::NetBuilder::with_options(options)
+        .threads(1)
+        .unwrap()
+        .load_bytes(PARAM, &[])
+        .unwrap();
+    let (input_a, input_b) = operands();
+    let mut extractor = net.extractor().unwrap();
+    extractor.input("a", input_a).unwrap();
+    extractor.input("b", input_b).unwrap();
+    assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
+}
+
+#[test]
+fn affine_helpers_place_and_warp_pixels() {
+    let from = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0]];
+    let to = [[0.0f32, 0.0], [2.0, 0.0], [0.0, 2.0]];
+    let scale = ncnn_rust::image::affine_transform(&from, &to).unwrap();
+    let inverse = ncnn_rust::image::invert_affine(&scale);
+    assert!((inverse[0] - 0.5).abs() < 1e-6, "the inverse halves x");
+    assert!((inverse[4] - 0.5).abs() < 1e-6, "the inverse halves y");
+    assert!(ncnn_rust::image::affine_transform(&from[..1], &[]).is_err());
+
+    let pixels = [10u8, 20, 30, 40];
+    let identity = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let warped = ncnn_rust::image::warp_affine(
+        &pixels,
+        (2, 2),
+        1,
+        (2, 2),
+        &identity,
+        ncnn_rust::image::WarpBorder::Replicate,
+        0,
+    )
+    .unwrap();
+    assert_eq!(warped, pixels, "an identity warp keeps the pixels");
+    let blank = ncnn_rust::image::warp_affine(
+        &pixels,
+        (2, 2),
+        1,
+        (2, 2),
+        &scale,
+        ncnn_rust::image::WarpBorder::Constant,
+        7,
+    )
+    .unwrap();
+    assert!(blank.contains(&7), "the border fills");
 }

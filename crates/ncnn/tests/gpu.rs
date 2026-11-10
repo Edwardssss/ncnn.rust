@@ -352,8 +352,21 @@ fn vulkan_surface_contracts() {
         "cache payload"
     );
     device.load_pipeline_cache(&path).expect("load cache");
+    let bytes = device.pipeline_cache().expect("serialize cache");
+    assert_eq!(
+        bytes,
+        std::fs::read(&path).expect("read cache"),
+        "memory form"
+    );
+    device
+        .set_pipeline_cache(&bytes)
+        .expect("load memory cache");
     std::fs::write(&path, b"not a cache").expect("write");
     assert!(device.load_pipeline_cache(&path).is_err(), "damaged cache");
+    assert!(
+        device.set_pipeline_cache(b"not a cache").is_err(),
+        "damaged memory cache"
+    );
     std::fs::remove_file(&path).expect("remove cache");
 
     if devices.len() < 2 {
