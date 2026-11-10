@@ -130,6 +130,44 @@ not move, which is the confirmation that the cost is the allocate-and-free cycle
 wrapper. `cargo run --release -p ncnn-rust --example fast_allocator` prints the same two figures with
 the allocator declared; remove the `#[global_allocator]` line to measure the system heap.
 
+## Linux hosts
+
+A Linux run of the same request-path modes on a WSL2 Debian guest (8 vCPU AMD Ryzen 7 5800H, glibc
+2.41, gcc 14.2, `libncnn.so` built from `vendor/ncnn-20261020`, one thread, pinned to one core,
+minimum of three runs) reproduces the Windows ranking and shows the mechanism:
+
+| Mode | ns per request | Rust allocations per request |
+|---|---:|---:|
+| `native-request` | 23371 | none |
+| `resolved-reused` | 15934 | 0 |
+| `borrowed-reused` | 24349 | 5 x 123 B |
+| `owned-guard` | 10053 | 2 small |
+| `owned-view` | 208833 | 1 x 262 KB |
+| `copy` | 473106 | 4 x 262 KB |
+
+The modes that borrow or reuse an output match or beat the C API; the modes that return
+independent storage pay for page faults rather than for copies. A standalone probe of the
+allocator shows the whole effect: allocating and freeing one 256 KB buffer per iteration costs
+4.8 us and faults nothing, because the freed chunk is reused immediately, while holding two
+distinct 256 KB buffers alive per iteration costs 203 us and faults 96 times per iteration,
+because glibc serves each buffer from a fresh mapping and returns it to the kernel on free. The
+fault count is the cost: 28803 minor faults over 300 iterations, about 2.1 us per fault on this
+guest. Running the same two-buffer probe with `MALLOC_MMAP_THRESHOLD_=1073741824` and
+`MALLOC_TRIM_THRESHOLD_=-1` removes both the mapping round trip and the faults and brings it to
+9.4 us with 4 faults in total. The request path follows the same rule: `owned-view` allocates the
+input tensor and the output vector per request and lands at 209 us, `copy` allocates four buffers
+and lands at 473 us, and setting the same two variables in the environment drops `owned-view` to
+17.6 us.
+
+Two conclusions follow. Reusing storage is the portable fix, and `infer_into`,
+`infer_borrowed_into` and `extract` already do that at native parity. Where an application cannot
+reuse, the allocator decides: either raise the mapping thresholds so the heap keeps the pages, as
+above, or choose an allocator that retains them. A thread-caching allocator did not help on this
+guest (226 to 235 us for `owned-view` with `MIMALLOC_PURGE_DELAY=-1` and
+`MIMALLOC_ARENA_EAGER_COMMIT=1`), so the environment variables are the reliable lever there. The
+per-fault cost of a WSL2 guest is several times that of bare metal, so the absolute gap is smaller
+on a native Linux host, but the ranking and the mechanism are the same.
+
 ## Reproducing
 
 The tables come from a campaign harness that is maintained outside this repository. In-repo
@@ -143,6 +181,10 @@ cargo run --release -p ncnn-rust --example api_benchmark -- preprocess 200 65536
 cargo run --release -p ncnn-rust --example model_regression -- \
   target/model-fixtures target/cpu-reference/ncnn_cpu_reference  # native C++ versus Rust outputs
 cargo test --workspace --features vulkan                         # contracts and the conformance suite
+# Linux: compare the owned-output form with and without the mapping thresholds
+cargo run --release -p ncnn-rust --example api_benchmark -- owned-view 300 65536
+MALLOC_MMAP_THRESHOLD_=1073741824 MALLOC_TRIM_THRESHOLD_=-1 \
+  cargo run --release -p ncnn-rust --example api_benchmark -- owned-view 300 65536
 ```
 
 The [model fixtures](model-fixtures.md) page lists the reference build commands. The recorded

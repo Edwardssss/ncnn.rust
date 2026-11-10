@@ -154,7 +154,10 @@ Preprocessing and tensor lifecycle, median microseconds:
 | clone and normalize | 12.958 | 28.366 |
 
 Normalization and reshape return independent storage here, where the native entry mutates or shares
-it, which accounts for that row. The method, the full tables and the reproduction commands are in
+it, which accounts for that row. Linux hosts show the same ranking through page faults: glibc maps an
+output-sized buffer for each request and returns it to the kernel on free, so the forms that return
+independent storage fault their pages again every request while the reuse forms match the C API. The
+method, the full tables, the Linux measurements and the reproduction commands are in
 [Performance](docs/performance.md).
 
 ## Documentation

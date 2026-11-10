@@ -112,17 +112,26 @@ through the C API, while `infer_into`, `infer_borrowed_into` and `extract` are a
 faster.
 
 **Cause:** those forms return independent storage, so every request allocates an output-sized buffer
-and frees it again. On Windows the default process heap is much slower than a thread-caching allocator
-for that allocate-and-free cycle; the copy itself is not the cost.
+and frees it again. On Windows the default process heap is much slower than a thread-caching
+allocator for that allocate-and-free cycle; on Linux glibc serves each output-sized buffer from a
+fresh mapping and returns it to the kernel on free, so every request faults its pages again. The
+copy itself is not the cost.
 
-**Fix:** either reuse a buffer, which removes the allocation entirely, or declare a drop-in allocator
-in the application:
+**Fix:** either reuse a buffer, which removes the allocation entirely, or tune the allocator of the
+application. Linux hosts can raise the mapping thresholds instead of switching allocator:
+
+```sh
+MALLOC_MMAP_THRESHOLD_=1073741824 MALLOC_TRIM_THRESHOLD_=-1 ./my-inference-server
+```
+
+Windows hosts can declare a drop-in allocator:
 
 ```rust
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 ```
 
-The [performance page](performance.md#allocator-choice) records both figures and the example in
-`crates/ncnn/examples/fast_allocator.rs` reproduces them. A library cannot set the global allocator
-for its caller, so this is an application decision.
+The [performance page](performance.md#allocator-choice) records both figures, and the
+[Linux section](performance.md#linux-hosts) records the fault counts behind the Linux behaviour. The
+example in `crates/ncnn/examples/fast_allocator.rs` reproduces the Windows figures. A library cannot
+set the global allocator for its caller, so this is an application decision.

@@ -20,6 +20,22 @@ Earlier CPU evidence came from Linux x86-64 with a Windows virtual machine. Vulk
 from native Windows/NVIDIA hardware. No Apple SDK or connected Mac runner is recorded for that
 period, so those results do not establish macOS execution.
 
+## Debian WSL request-path campaign
+
+Debian WSL2 guest on a Ryzen 7 5800H host, 8 vCPU, 25 GB RAM, glibc 2.41, gcc 14.2, Rust 1.92,
+ncnn 20261020 built as a shared SDK from `vendor/ncnn-20261020`, one thread, pinned with
+`taskset -c 2` and repeated at least three times per mode. The request-path modes ranked as they do
+on Windows: `owned-guard` 10053 ns, `resolved-reused` 15934 ns, `native-request` 23371 ns,
+`borrowed-reused` 24349 ns, `owned-view` 208833 ns and `copy` 473106 ns per request. The workspace
+tests passed on the same guest: 52 conformance cases, 3 further integration cases and 13 doctests.
+The guest has no GPU, so Vulkan was not exercised there.
+
+A separate probe isolated the cause of the owned-output cost. One 256 KB `Vec` allocated and freed
+per iteration costs 4.8 us with no faults; two distinct 256 KB buffers held per iteration cost
+203 us with 28803 minor faults over 300 iterations; the same probe with
+`MALLOC_MMAP_THRESHOLD_=1073741824` and `MALLOC_TRIM_THRESHOLD_=-1` costs 9.4 us with 4 faults in
+total; and `owned-view` drops from 219 us to 17.6 us under the same two variables.
+
 ## Windows Vulkan hardware
 
 Ryzen 7 5800H, GeForce RTX 3060 Laptop GPU, NVIDIA driver 596.49, Rust 1.96.1, CMake 4.2.1, MSVC

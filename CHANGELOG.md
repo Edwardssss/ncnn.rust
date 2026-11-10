@@ -87,6 +87,10 @@ library upgrade is a minor change of this crate.
   (`Error::NativeAt`), so a refused allocation reads as `Vulkan upload` instead of a bare status.
 - `docs/contracts.md`, `docs/troubleshooting.md` and `docs/evidence-history.md` record the measured
   device-memory exhaustion behaviour, and `Mat::to_i8` states that it reads signed storage.
+- The performance page records a Linux run of the request-path modes: the modes that reuse storage
+  match the C API, and the forms that return independent storage pay a page fault for every output
+  page, because glibc maps an output-sized buffer per request and returns it to the kernel on free.
+  The troubleshooting entry names the mapping thresholds that keep those pages.
 
 ## 0.2.0 - 2026-11-10
 
