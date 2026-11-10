@@ -17,9 +17,11 @@ library upgrade is a minor change of this crate.
 
 - The coverage job writes an lcov with per-line records, prints the summary, fails below 85 percent
   line coverage, and rejects a report without `DA` records.
-- The version matrix runs the suite and the model comparison on the pinned release and reports the
-  declaration gap for older tags, which cannot link an adapter written against the pinned headers.
-  Its tag listing sends `GITHUB_TOKEN`, so a shared runner address cannot exhaust the API limit.
+- The nightly fuzz workflow runs its target on the nightly toolchain, which `rust-toolchain.toml`
+  otherwise shadows, and the version matrix resolves tags with `GITHUB_TOKEN`, imports the shared SDK
+  into the loader path, and reports the declaration gap for tags that cannot link the adapter.
+- Both CPU examples and both device examples run in CI, and rustdoc builds with `-D warnings` on
+  every push instead of only during the documentation deploy.
 - A probe test prints the finiteness of three attention configurations. The `ubuntu-24.04-arm`
   runner matches x86-64 for the two-dimensional operand, while a three-dimensional operand with one
   channel returns `NaN` for one sequence row there, so the layer case uses the two-dimensional form

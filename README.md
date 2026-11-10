@@ -128,8 +128,9 @@ for ReLU and AbsVal on CPU). Method and full tables: [Performance](docs/performa
 ## Validation
 
 CI builds ncnn from source on Linux x86-64, Linux ARM64, Windows, macOS x86-64 and macOS Apple
-Silicon, then runs formatting, Clippy, the workspace tests, the example, a publish dry run for both
-packages and a build of a separate crate that depends on the packaged archives.
+Silicon, then runs formatting, Clippy, the workspace tests, the examples, a rustdoc build with
+warnings denied, a publish dry run for both packages and a build of a separate crate that depends on
+the packaged archives.
 Separate jobs check the declared minimum Rust version and run the Vulkan contracts against the
 Mesa lavapipe software device, compare the public API with the published release, and resolve every
 documentation link and anchor without network access. The contracts cover device selection, allocator accounting,
