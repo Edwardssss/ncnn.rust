@@ -79,10 +79,12 @@ jobs:
         env:
           NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
         run: |
+          report="$RUNNER_TEMP/gap.txt"
+          python3 tools/compat-gap.py --sdk "$NCNN_INSTALL_DIR" --baseline vendor/pinned/c_api.h | tee "$report"
           {
             echo "### ncnn ${{ matrix.version }}"
             echo '```'
-            python3 tools/compat-gap.py --sdk "$NCNN_INSTALL_DIR" --baseline vendor/pinned/c_api.h
+            cat "$report"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
