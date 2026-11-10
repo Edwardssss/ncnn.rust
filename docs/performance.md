@@ -130,6 +130,21 @@ not move, which is the confirmation that the cost is the allocate-and-free cycle
 wrapper. `cargo run --release -p ncnn-rust --example fast_allocator` prints the same two figures with
 the allocator declared; remove the `#[global_allocator]` line to measure the system heap.
 
+A glibc heap needs no replacement allocator, only the two thresholds that decide when a buffer
+leaves the heap. `heap::retain_pages` applies both from inside the process, which matters when the
+service cannot set its own environment. The same two forms, 65536 FP32 elements on the WSL2 guest
+below, minimum of three rounds each:
+
+| Measurement | before | after `heap::retain_pages` |
+|---|---:|---:|
+| owned-output request (`infer`) | 255541 ns | 31754 ns |
+| borrowed-input, reused-buffer request | 23603 ns | 23912 ns |
+
+The owned-output form drops by about eight times, and the reused-buffer form does not move, which is
+the same confirmation the allocator table gives. `cargo run --release -p ncnn-rust --example
+heap_retention` prints both figures; the call reports `false` on targets whose heap has no such
+setting, so the figures there differ only by host noise.
+
 ## Linux hosts
 
 A Linux run of the same request-path modes on a WSL2 Debian guest (8 vCPU AMD Ryzen 7 5800H, glibc
@@ -159,14 +174,15 @@ input tensor and the output vector per request and lands at 209 us, `copy` alloc
 and lands at 473 us, and setting the same two variables in the environment drops `owned-view` to
 17.6 us.
 
-Two conclusions follow. Reusing storage is the portable fix, and `infer_into`,
-`infer_borrowed_into` and `extract` already do that at native parity. Where an application cannot
-reuse, the allocator decides: either raise the mapping thresholds so the heap keeps the pages, as
-above, or choose an allocator that retains them. A thread-caching allocator did not help on this
-guest (226 to 235 us for `owned-view` with `MIMALLOC_PURGE_DELAY=-1` and
-`MIMALLOC_ARENA_EAGER_COMMIT=1`), so the environment variables are the reliable lever there. The
-per-fault cost of a WSL2 guest is several times that of bare metal, so the absolute gap is smaller
-on a native Linux host, but the ranking and the mechanism are the same.
+Two conclusions follow. Reusing storage is the portable fix, and `infer_into`, `infer_borrowed_into`
+and `extract` already do that at native parity. Where an application cannot reuse, the heap decides:
+`heap::retain_pages` sets both thresholds from inside the process, a host that starts the process
+can set the same two variables instead, and an allocator that retains pages is the equivalent on a
+host whose heap has no such setting. A thread-caching allocator did not help on this guest (226 to
+235 us for `owned-view` with `MIMALLOC_PURGE_DELAY=-1` and `MIMALLOC_ARENA_EAGER_COMMIT=1`), so
+those two thresholds are the reliable lever there. The per-fault cost of a WSL2 guest is several
+times that of bare metal, so the absolute gap is smaller on a native Linux host, but the ranking and
+the mechanism are the same.
 
 ## Reproducing
 
@@ -178,6 +194,7 @@ python3 tools/fetch-models.py                                   # pinned fixture
 cargo run --release -p ncnn-rust --example api_benchmark         # per-request cost and allocation counts
 cargo run --release -p ncnn-rust --example api_benchmark -- native-request 300 65536
 cargo run --release -p ncnn-rust --example api_benchmark -- preprocess 200 65536
+cargo run --release -p ncnn-rust --example heap_retention       # heap retention before and after
 cargo run --release -p ncnn-rust --example model_regression -- \
   target/model-fixtures target/cpu-reference/ncnn_cpu_reference  # native C++ versus Rust outputs
 cargo test --workspace --features vulkan                         # contracts and the conformance suite

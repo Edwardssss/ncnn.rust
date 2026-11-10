@@ -4,6 +4,11 @@
 //! storage. Owned input removes the aliasing question at the API boundary: [`Net::infer`]
 //! returns independent vectors and [`Extractor::extract`] borrows a scored CPU output.
 //!
+//! The forms that return independent storage allocate and free an output-sized buffer per request,
+//! which is the dominant cost of a small request on a host whose heap returns freed pages to the
+//! kernel. [`heap::retain_pages`] keeps those pages mapped on glibc Linux, and
+//! [`Net::infer_borrowed_into`] removes the allocation by reusing a caller buffer.
+//!
 //! ```compile_fail
 //! let net = ncnn_rust::Net::new().unwrap();
 //! std::thread::spawn(move || drop(net));
@@ -22,6 +27,7 @@
 pub mod cpu;
 #[cfg(feature = "vulkan")]
 pub mod gpu;
+pub mod heap;
 pub mod image;
 pub use ncnn_sys as sys;
 

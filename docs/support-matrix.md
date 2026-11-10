@@ -33,7 +33,7 @@ ownership interfaces are identical on every target.
 
 | Target | Implementation | Validated on |
 |---|---|---|
-| Linux x86-64 GNU | Static and shared SDKs, simpleomp or system OpenMP | Physical hardware, native CPU and Vulkan tests |
+| Linux x86-64 GNU | Static and shared SDKs, simpleomp or system OpenMP | Physical hardware and a WSL2 Debian guest, native CPU and Vulkan tests |
 | Linux ARM64 GNU | Target compiler and sysroot, ARM feature queries, Linux topology | QEMU user emulation; native runner in CI |
 | Windows x86-64 MSVC | `/MD` and `/MT`, static and shared SDKs, processor groups | Physical hardware, native CPU and Vulkan tests |
 | macOS x86-64 | `.a` and `.dylib`, libc++, physical-core query, no exact affinity | `macos-15-intel` CI job |

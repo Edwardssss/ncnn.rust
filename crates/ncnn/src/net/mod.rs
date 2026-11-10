@@ -219,6 +219,12 @@ impl Net {
     /// Every output is converted to FP32, so a network that returns quantized storage needs
     /// [`infer_stored`](Self::infer_stored) instead.
     ///
+    /// Every request allocates the output vector and frees it again, which is the largest cost of
+    /// this form on a host whose heap returns freed pages to the kernel.
+    /// [`infer_into`](Self::infer_into) and [`infer_borrowed_into`](Self::infer_borrowed_into) write
+    /// into a caller buffer instead and allocate no data buffer, and
+    /// [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
+    ///
     /// ```
     /// let net = ncnn_rust::Net::builder()?.threads(1)?.load_bytes(
     ///     "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",

@@ -40,6 +40,14 @@ library upgrade is a minor change of this crate.
 - `crates/ncnn/examples/fast_allocator.rs` measures the request path with a drop-in allocator, and the
   performance page records what it changes: on Windows the owned-output form is dominated by the
   process heap, while the forms that reuse a buffer do not move.
+- `heap::retain_pages` keeps the pages of a freed output buffer mapped on glibc Linux, which removes
+  the per-request page faults of the forms that return independent storage.
+  `heap::set_mapping_limit`, `heap::disable_trimming` and `heap::retain_pages_up_to` set the two
+  thresholds individually, and every function reports whether the heap accepted them, so portable
+  code calls the preset and ignores a `false` on other targets. The crate applies the settings
+  itself because a service cannot always set the environment of its own process.
+- `crates/ncnn/examples/heap_retention.rs` prints the owned-output and reused-buffer figures before
+  and after that call, and CI runs it next to the allocator example.
 - `Net::option` reads the option value a loaded network actually uses.
 - Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
   `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border` and the

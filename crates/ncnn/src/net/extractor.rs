@@ -302,6 +302,10 @@ impl Extractor<'_> {
     /// exported raw handles and networks with more than one live extractor. It converts the output
     /// to FP32 and copies it, so a quantized model needs
     /// [`extract_stored_owned`](Self::extract_stored_owned).
+    ///
+    /// Each call allocates the value vector and frees it again. [`extract_into`](Self::extract_into)
+    /// appends to a caller buffer instead and allocates no data buffer, and
+    /// [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
     pub fn extract_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<FinalOutput> {
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, false)?;

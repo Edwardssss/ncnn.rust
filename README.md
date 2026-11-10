@@ -156,9 +156,11 @@ Preprocessing and tensor lifecycle, median microseconds:
 Normalization and reshape return independent storage here, where the native entry mutates or shares
 it, which accounts for that row. Linux hosts show the same ranking through page faults: glibc maps an
 output-sized buffer for each request and returns it to the kernel on free, so the forms that return
-independent storage fault their pages again every request while the reuse forms match the C API. The
-method, the full tables, the Linux measurements and the reproduction commands are in
-[Performance](docs/performance.md).
+independent storage fault their pages again every request while the reuse forms match the C API.
+`ncnn_rust::heap::retain_pages()` keeps those pages mapped, and the environment variables
+`MALLOC_MMAP_THRESHOLD_` and `MALLOC_TRIM_THRESHOLD_` set the same thresholds for a process the
+application does not start itself. The method, the full tables, the Linux measurements and the
+reproduction commands are in [Performance](docs/performance.md).
 
 ## Documentation
 

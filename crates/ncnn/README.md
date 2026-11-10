@@ -108,6 +108,11 @@ ex.extract_into(&output_id, &mut buffer)?;
 # }
 ```
 
+Forms that return independent storage, such as `Net::infer` and `Extractor::extract_owned`, allocate
+and free an output-sized vector per request. A glibc heap returns those pages to the kernel, so the
+next request faults them again; `heap::retain_pages` keeps them mapped for the rest of the process,
+and the reuse form above needs no such call because it allocates no data buffer.
+
 Exact affinity is an OS capability. Linux and Windows expose processor IDs and thread masks; macOS
 reports `Error::Unsupported` for exact mask operations while core inference and physical-core
 queries remain separate.

@@ -117,14 +117,22 @@ allocator for that allocate-and-free cycle; on Linux glibc serves each output-si
 fresh mapping and returns it to the kernel on free, so every request faults its pages again. The
 copy itself is not the cost.
 
-**Fix:** either reuse a buffer, which removes the allocation entirely, or tune the allocator of the
-application. Linux hosts can raise the mapping thresholds instead of switching allocator:
+**Fix:** either reuse a buffer, which removes the allocation entirely, or keep the freed pages
+mapped. On glibc Linux the crate applies the two settings itself:
 
-```sh
-MALLOC_MMAP_THRESHOLD_=1073741824 MALLOC_TRIM_THRESHOLD_=-1 ./my-inference-server
+```rust
+ncnn_rust::heap::retain_pages();
 ```
 
-Windows hosts can declare a drop-in allocator:
+The call is process-wide and lasts for the rest of the run, like a global allocator. A service that
+cannot change its own process environment can use it, and a host that starts the process itself can
+raise the same thresholds instead:
+
+```sh
+MALLOC_MMAP_THRESHOLD_=67108864 MALLOC_TRIM_THRESHOLD_=-1 ./my-inference-server
+```
+
+Windows hosts declare a drop-in allocator:
 
 ```rust
 #[global_allocator]
@@ -133,5 +141,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 The [performance page](performance.md#allocator-choice) records both figures, and the
 [Linux section](performance.md#linux-hosts) records the fault counts behind the Linux behaviour. The
-example in `crates/ncnn/examples/fast_allocator.rs` reproduces the Windows figures. A library cannot
-set the global allocator for its caller, so this is an application decision.
+example in `crates/ncnn/examples/fast_allocator.rs` reproduces the Windows figures, and
+`crates/ncnn/examples/heap_retention.rs` prints the Linux figures before and after the call. A
+library cannot set the global allocator for its caller, so the allocator stays an application
+decision; the heap settings are the one part the crate can apply itself.

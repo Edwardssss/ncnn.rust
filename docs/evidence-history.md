@@ -28,13 +28,24 @@ ncnn 20261020 built as a shared SDK from `vendor/ncnn-20261020`, one thread, pin
 on Windows: `owned-guard` 10053 ns, `resolved-reused` 15934 ns, `native-request` 23371 ns,
 `borrowed-reused` 24349 ns, `owned-view` 208833 ns and `copy` 473106 ns per request. The workspace
 tests passed on the same guest: 52 conformance cases, 3 further integration cases and 13 doctests.
-The guest has no GPU, so Vulkan was not exercised there.
+That run built without the Vulkan feature; the campaign below adds it.
 
 A separate probe isolated the cause of the owned-output cost. One 256 KB `Vec` allocated and freed
 per iteration costs 4.8 us with no faults; two distinct 256 KB buffers held per iteration cost
 203 us with 28803 minor faults over 300 iterations; the same probe with
 `MALLOC_MMAP_THRESHOLD_=1073741824` and `MALLOC_TRIM_THRESHOLD_=-1` costs 9.4 us with 4 faults in
 total; and `owned-view` drops from 219 us to 17.6 us under the same two variables.
+`ncnn_rust::heap::retain_pages` applies the same two settings from inside the process and moved the
+owned-output request from 255541 ns to 31754 ns on this guest while the reused-buffer form stayed at
+23603 ns and 23912 ns.
+
+Vulkan ran on the same guest against Mesa lavapipe 25.0.7, the software device the Linux Vulkan CI
+job uses: `vulkaninfo` reported one physical device, `llvmpipe (LLVM 19.1.7, 256 bits)`, with FP16
+and INT8 packing, storage, uniform and arithmetic support, and `cargo test --workspace --features
+vulkan` passed the 52 conformance cases, the four Vulkan contracts, the heap retention test and the
+15 doctests. The `add -- --vulkan` and `vulkan_resident` examples ran on the device: the resident
+example printed the device line, `[5.0, 7.0, 9.0]` from a resident upload, and the pool allocator as
+32 bytes live against a 48-byte high-water mark.
 
 ## Windows Vulkan hardware
 
