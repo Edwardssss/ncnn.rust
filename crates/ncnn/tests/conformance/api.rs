@@ -23,6 +23,63 @@ fn operands() -> (Mat, Mat) {
 }
 
 #[test]
+fn pooled_networks_reuse_intermediate_memory() {
+    assert!(!sum_net().reuses_blob_memory());
+    let pooled = Net::builder()
+        .unwrap()
+        .reuse_blob_memory()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(PARAM, &[])
+        .unwrap();
+    assert!(pooled.reuses_blob_memory());
+
+    let (input_a, input_b) = operands();
+    let mut extractor = pooled.extractor().unwrap();
+    extractor.input("a", input_a).unwrap();
+    extractor.input("b", input_b).unwrap();
+    assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
+    drop(extractor);
+
+    let mut buffer = Vec::new();
+    for _ in 0..4 {
+        let (input_a, input_b) = operands();
+        let ranges = pooled
+            .infer_into([("a", input_a), ("b", input_b)], &["sum"], &mut buffer)
+            .unwrap();
+        assert_eq!(&buffer[ranges[0].values.clone()], [5., 7., 9.]);
+        let left = vec![4f32, 5., 6.];
+        let right = vec![1f32, 2., 3.];
+        let ranges = pooled
+            .infer_borrowed_into(
+                &[("a", &left, &[3]), ("b", &right, &[3])],
+                &["sum"],
+                &mut buffer,
+            )
+            .unwrap();
+        assert_eq!(&buffer[ranges[0].values.clone()], [5., 7., 9.]);
+    }
+
+    // The pools outlive the network that installed them, so a network releases both on drop.
+    for _ in 0..16 {
+        let pooled = Net::builder()
+            .unwrap()
+            .reuse_blob_memory()
+            .unwrap()
+            .threads(1)
+            .unwrap()
+            .load_bytes(PARAM, &[])
+            .unwrap();
+        let (input_a, input_b) = operands();
+        let mut extractor = pooled.extractor().unwrap();
+        extractor.input("a", input_a).unwrap();
+        extractor.input("b", input_b).unwrap();
+        assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
+    }
+}
+
+#[test]
 fn file_loading_matches_byte_loading() {
     let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     let parameters = directory.join("api-file-loading.param");

@@ -107,6 +107,7 @@ jobs:
           cargo run -p ncnn-rust --example typed_tensors
           cargo run -p ncnn-rust --example api_benchmark -- preprocess 50 4096
           cargo run -p ncnn-rust --example api_benchmark -- native-request 50 4096
+          cargo run -p ncnn-rust --example api_benchmark -- pooled-request 50 4096
           cargo run -p ncnn-rust --example fast_allocator
           cargo run -p ncnn-rust --example heap_retention
 

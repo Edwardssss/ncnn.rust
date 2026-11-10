@@ -109,9 +109,11 @@ ex.extract_into(&output_id, &mut buffer)?;
 ```
 
 Forms that return independent storage, such as `Net::infer` and `Extractor::extract_owned`, allocate
-and free an output-sized vector per request. A glibc heap returns those pages to the kernel, so the
-next request faults them again; `heap::retain_pages` keeps them mapped for the rest of the process,
-and the reuse form above needs no such call because it allocates no data buffer.
+and free an output-sized vector per request, and the native network allocates its intermediate
+tensors per request as well. `NetBuilder::reuse_blob_memory` gives those tensors a pool the network
+owns, which is the half no process allocator setting reaches, and the reuse form above removes the
+output vector: together they leave no per-request allocation. A glibc host that still allocates has
+`heap::retain_pages` for the pages of a caller-allocated buffer.
 
 Exact affinity is an OS capability. Linux and Windows expose processor IDs and thread masks; macOS
 reports `Error::Unsupported` for exact mask operations while core inference and physical-core

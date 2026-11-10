@@ -154,13 +154,13 @@ Preprocessing and tensor lifecycle, median microseconds:
 | clone and normalize | 12.958 | 28.366 |
 
 Normalization and reshape return independent storage here, where the native entry mutates or shares
-it, which accounts for that row. Linux hosts show the same ranking through page faults: glibc maps an
-output-sized buffer for each request and returns it to the kernel on free, so the forms that return
-independent storage fault their pages again every request while the reuse forms match the C API.
-`ncnn_rust::heap::retain_pages()` keeps those pages mapped, and the environment variables
-`MALLOC_MMAP_THRESHOLD_` and `MALLOC_TRIM_THRESHOLD_` set the same thresholds for a process the
-application does not start itself. The method, the full tables, the Linux measurements and the
-reproduction commands are in [Performance](docs/performance.md).
+it, which accounts for that row. A request also allocates inside the engine:
+`NetBuilder::reuse_blob_memory()` gives the network's intermediate tensors a pool it owns, which is
+the measured lever on both hosts, and the reuse forms (`infer_into`, `infer_borrowed_into`) remove the
+caller-side vector. Linux hosts show the same ranking through page faults, and
+`ncnn_rust::heap::retain_pages()` keeps the pages of a caller-allocated buffer mapped. The method, the
+full tables, the pooled and Linux measurements and the reproduction commands are in
+[Performance](docs/performance.md).
 
 ## Documentation
 

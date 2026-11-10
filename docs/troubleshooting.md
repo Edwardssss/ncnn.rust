@@ -130,14 +130,25 @@ let bytes = outputs[0].1.to_i8()?;
 through the C API, while `infer_into`, `infer_borrowed_into` and `extract` are at native parity or
 faster.
 
-**Cause:** those forms return independent storage, so every request allocates an output-sized buffer
-and frees it again. On Windows the default process heap is much slower than a thread-caching
-allocator for that allocate-and-free cycle; on Linux glibc serves each output-sized buffer from a
-fresh mapping and returns it to the kernel on free, so every request faults its pages again. The
-copy itself is not the cost.
+**Cause:** the request allocates in two places. The wrapper allocates the output vector and frees it
+again, and the native network allocates its intermediate tensors per request. On Windows the default
+process heap is much slower than a thread-caching allocator for that cycle; on Linux glibc serves
+output-sized requests from a fresh mapping and returns it to the kernel on free, so every request
+faults the pages again. The copy itself is not the cost.
 
-**Fix:** either reuse a buffer, which removes the allocation entirely, or keep the freed pages
-mapped. On glibc Linux the crate applies the two settings itself:
+**Fix:** reuse storage and give the network a pool.
+
+```rust
+let net = Net::builder()?.reuse_blob_memory()?.load_files("model.param", "model.bin")?;
+let mut outputs = Vec::new();
+net.infer_into(inputs, &["out"], &mut outputs)?;
+```
+
+`reuse_blob_memory` attaches the pool allocators that serve the network's intermediate tensors,
+which is the half no process allocator setting reaches; `infer_into` and `infer_borrowed_into`
+remove the output vector allocation. The `pooled-request` mode of `api_benchmark` times both halves
+on one host. A caller that wants the owned form keeps one allocation, and the settings below address
+it. On glibc Linux the crate applies those settings itself:
 
 ```rust
 ncnn_rust::heap::retain_pages();

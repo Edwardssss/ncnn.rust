@@ -52,6 +52,12 @@ library upgrade is a minor change of this crate.
 - `crates/ncnn/examples/heap_retention.rs` prints the owned-output and reused-buffer figures before
   and after that call plus the raw two-buffer cost of the host, and CI runs it next to the allocator
   example.
+- `NetBuilder::reuse_blob_memory` gives a network one pool allocator for intermediate blobs and one
+  for layer workspace, and the network keeps both alive, so every extractor takes its scratch memory
+  from the pools instead of allocating it per request. `Net::reuses_blob_memory` reports whether a
+  network was built that way. The `api_benchmark pooled-request` mode times the four request forms on
+  a pooled network next to a default one, and the owned form drops by about ten times on glibc and by
+  two to three times on the Windows host that the performance page records.
 - `Net::option` reads the option value a loaded network actually uses.
 - Tensor helpers that run on the native kernels: `Mat::fill`, `Mat::normalize_in_place`,
   `Mat::to_pixels`, `Mat::to_pixels_resize`, `Mat::copy_make_border`, `Mat::copy_cut_border` and the

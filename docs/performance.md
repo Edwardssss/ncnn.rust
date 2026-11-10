@@ -112,6 +112,33 @@ measurement of a 256 KB `Vec` copy on the same host reported 77 to 108 us, the s
 inference, so the owned-output form is dominated by allocator and memory behaviour rather than by the
 wrapper.
 
+## Reusing native memory
+
+The network allocates its intermediate tensors per request, and on a heap that returns freed memory
+to the kernel that allocation costs more than the arithmetic. `NetBuilder::reuse_blob_memory` gives
+the network one pool allocator for intermediate blobs and one for layer workspace, so every
+extractor takes that memory from the pool instead. The `api_benchmark pooled-request` mode times the
+four request forms on a pooled network next to the same forms on a default one, rotating the cases
+and reporting medians; 65536 elements, one thread, one run of the mode per host:
+
+| Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
+|---|---:|---:|---:|---:|
+| `guard` (borrowed output) | 27546 ns | 18308 ns | 104975 ns | 33679 ns |
+| `extract_owned` (owned output) | 251569 ns | 24375 ns | 225228 ns | 112721 ns |
+| `infer_into` (owned input, reused buffer) | 32288 ns | 25400 ns | 104164 ns | 40784 ns |
+| `infer_borrowed_into` (borrowed input and buffer) | 24718 ns | 17602 ns | 43721 ns | 19169 ns |
+
+The owned form gains most because it was the form that allocated: about ten times on the glibc guest
+and about two to three times on the Windows host, whose heap serves the same pattern more cheaply.
+The pooled figures agree across hosts to within the spread that the hosts show on their own, which
+is what a request path bound by the engine rather than by the allocator looks like. The pools keep
+the blocks they served for as long as the network lives, so the retained set grows by the working
+set of one request and drops with the network.
+
+`heap::retain_pages` addresses the other half: the pages of a buffer the caller allocates. A pooled
+network does not remove that buffer, and a network without pools still allocates its tensors, so the
+two settings are independent.
+
 ## Allocator choice
 
 The wrapper never sets an allocator for its caller, so an application chooses one. The choice matters
@@ -201,6 +228,7 @@ python3 tools/fetch-models.py                                   # pinned fixture
 cargo run --release -p ncnn-rust --example api_benchmark         # per-request cost and allocation counts
 cargo run --release -p ncnn-rust --example api_benchmark -- native-request 300 65536
 cargo run --release -p ncnn-rust --example api_benchmark -- preprocess 200 65536
+cargo run --release -p ncnn-rust --example api_benchmark -- pooled-request 200 65536
 cargo run --release -p ncnn-rust --example heap_retention       # heap retention before and after
 cargo run --release -p ncnn-rust --example model_regression -- \
   target/model-fixtures target/cpu-reference/ncnn_cpu_reference  # native C++ versus Rust outputs

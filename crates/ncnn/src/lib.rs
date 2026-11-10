@@ -6,8 +6,9 @@
 //!
 //! The forms that return independent storage allocate and free an output-sized buffer per request,
 //! which is the dominant cost of a small request on a host whose heap returns freed pages to the
-//! kernel. [`heap::retain_pages`] keeps those pages mapped on glibc Linux, and
-//! [`Net::infer_borrowed_into`] removes the allocation by reusing a caller buffer.
+//! kernel. [`heap::retain_pages`] keeps those pages mapped on glibc Linux,
+//! [`Net::infer_borrowed_into`] removes the allocation by reusing a caller buffer, and
+//! [`NetBuilder::reuse_blob_memory`] gives the network's intermediate tensors a pool it owns.
 //!
 //! ```compile_fail
 //! let net = ncnn_rust::Net::new().unwrap();

@@ -18,10 +18,11 @@
 //! the faults and the `false` result on Windows.
 //!
 //! The setting is process-wide and holds for the rest of the run, like a global allocator, so an
-//! application calls it once at start-up. Reusing a buffer through
-//! [`Net::infer_into`](crate::Net::infer_into) or
-//! [`Net::infer_borrowed_into`](crate::Net::infer_borrowed_into) removes the allocation instead and
-//! needs no tuning at all.
+//! application calls it once at start-up. Two library-side forms remove the allocations instead and
+//! need no tuning: reusing a buffer through [`Net::infer_into`](crate::Net::infer_into) or
+//! [`Net::infer_borrowed_into`](crate::Net::infer_borrowed_into) removes the caller-side vector, and
+//! [`NetBuilder::reuse_blob_memory`](crate::NetBuilder::reuse_blob_memory) gives the network's own
+//! intermediate tensors a pool that outlives each request.
 
 /// The allocation size, in bytes, that `retain_pages` keeps on the heap.
 ///

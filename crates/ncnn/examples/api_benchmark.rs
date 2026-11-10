@@ -100,8 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "gpu-resident"
             | "preprocess"
             | "native-request"
+            | "pooled-request"
     ) {
-        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, gpu-resident, preprocess, or native-request".into());
+        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, gpu-resident, preprocess, native-request, or pooled-request".into());
     }
     let iterations: usize = args
         .get(2)
@@ -127,6 +128,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if mode == "native-request" {
         return native_request(iterations, elements);
+    }
+    if mode == "pooled-request" {
+        return pooled_request(iterations, elements);
     }
     // A borrowed input needs light mode off, so the modes that borrow keep the native default.
     let builder = Net::builder()?.threads(1)?;
@@ -169,6 +173,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+/// Times the request forms on a network that installs its own pools next to the same forms on a
+/// network that does not, rotating every case so a slow host warms them the same way. Each pair is
+/// one median, which is what the performance page records for [`NetBuilder::reuse_blob_memory`].
+fn pooled_request(iterations: usize, elements: usize) -> Result<(), Box<dyn std::error::Error>> {
+    use std::cell::RefCell;
+
+    const GRAPH: &str = "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n";
+    let values = vec![1f32; elements];
+    let plain = Net::builder()?.threads(1)?.load_bytes(GRAPH, &[])?;
+    let pooled = Net::builder()?
+        .reuse_blob_memory()?
+        .threads(1)?
+        .load_bytes(GRAPH, &[])?;
+    let buffer = RefCell::new(Vec::new());
+    let forms = [
+        "guard",
+        "extract-owned",
+        "infer-into",
+        "infer-borrowed-into",
+    ];
+    let mut samples: Vec<Vec<f64>> = vec![Vec::new(); forms.len() * 2];
+    let nets = [("default", &plain), ("pooled", &pooled)];
+    for _ in 0..5 {
+        for (net_index, (_, net)) in nets.iter().enumerate() {
+            for (form_index, form) in forms.iter().enumerate() {
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    black_box(request_form(net, form, &values, &buffer)?);
+                }
+                let sample = start.elapsed().as_nanos() as f64 / iterations as f64;
+                samples[form_index * 2 + net_index].push(sample);
+            }
+        }
+    }
+    for (form_index, form) in forms.iter().enumerate() {
+        let mut default_rounds = samples[form_index * 2].clone();
+        let mut pooled_rounds = samples[form_index * 2 + 1].clone();
+        default_rounds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        pooled_rounds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!(
+            "request-form={form}, elements={elements}, iterations={iterations}, default_median_ns={:.0}, pooled_median_ns={:.0}",
+            default_rounds[default_rounds.len() / 2],
+            pooled_rounds[pooled_rounds.len() / 2]
+        );
+    }
+    Ok(())
+}
+
+/// Runs one request form once and returns a checksum that depends on every output.
+fn request_form(
+    net: &Net,
+    form: &str,
+    values: &[f32],
+    buffer: &std::cell::RefCell<Vec<f32>>,
+) -> ncnn::Result<f32> {
+    let checksum = |slice: &[f32]| slice[0] + slice[slice.len() - 1];
+    if form == "guard" {
+        let mut extractor = net.extractor()?;
+        extractor.input("input", Mat::from_f32(values, &[values.len()])?)?;
+        let output = extractor.extract("output")?;
+        return Ok(checksum(output.as_f32_slice()?));
+    }
+    if form == "extract-owned" {
+        let mut extractor = net.extractor()?;
+        extractor.input("input", Mat::from_f32(values, &[values.len()])?)?;
+        let output = extractor.extract_owned("output")?;
+        return Ok(checksum(&output.values));
+    }
+    let mut target = buffer.borrow_mut();
+    if form == "infer-into" {
+        let ranges = net.infer_into(
+            [("input", Mat::from_f32(values, &[values.len()])?)],
+            &["output"],
+            &mut target,
+        )?;
+        return Ok(checksum(&target[ranges[0].values.clone()]));
+    }
+    let ranges = net.infer_borrowed_into(
+        &[("input", values, &[values.len()])],
+        &["output"],
+        &mut target,
+    )?;
+    Ok(checksum(&target[ranges[0].values.clone()]))
 }
 
 /// Runs the native C request path over the same graph, so the wrapper modes have a reference: the

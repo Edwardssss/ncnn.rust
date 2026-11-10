@@ -73,7 +73,21 @@ pub struct Net {
     pub(crate) guard: GuardState,
     #[cfg(feature = "vulkan")]
     device: Option<crate::gpu::Device>,
+    /// Pools the network installed through [`NetBuilder::reuse_blob_memory`].
+    ///
+    /// The native option block stores the allocator handles without owning them, and the native
+    /// network frees its blobs through them while it is destroyed, so these fields outlive `raw`:
+    /// the explicit `Drop` impl runs first and the fields drop afterwards.
+    pools: Option<NetPools>,
     _thread: PhantomData<Rc<()>>,
+}
+/// Holds the pools a network installed through [`NetBuilder::reuse_blob_memory`].
+///
+/// The fields are read only by their destructors, which run after the native network is destroyed.
+#[allow(dead_code, reason = "held for its destructor order")]
+struct NetPools {
+    blob: crate::PoolAllocator,
+    workspace: crate::PoolAllocator,
 }
 /// Configures a network and loads its model in one expression.
 ///
@@ -88,6 +102,7 @@ pub struct NetBuilder {
     options: Options,
     #[cfg(feature = "vulkan")]
     device: Option<crate::gpu::Device>,
+    pools: Option<NetPools>,
 }
 impl NetBuilder {
     /// Selects Vulkan for the network this builder creates.
@@ -102,14 +117,41 @@ impl NetBuilder {
         self.device = Some(device);
         self
     }
-    fn configured_net(self) -> Result<Net> {
+    fn configured_net(mut self) -> Result<Net> {
         let mut net = Net::new()?;
         net.configure(&self.options)?;
         #[cfg(feature = "vulkan")]
-        if let Some(device) = self.device {
+        if let Some(device) = self.device.take() {
             net.set_vulkan_device(device)?;
         }
+        net.pools = self.pools.take();
         Ok(net)
+    }
+    /// Reuses the memory of intermediate tensors across requests.
+    ///
+    /// The builder creates one native pool allocator for intermediate blobs and one for layer
+    /// workspace, attaches both to the option block before parameters load, and hands them to the
+    /// network, which outlives them. Every extractor of the network then takes its scratch memory
+    /// from those pools, so a request stops allocating and freeing intermediate tensors through the
+    /// process heap. The pools keep the largest blocks they served for as long as the network
+    /// lives, which is the memory the retained set grows by.
+    ///
+    /// This is the lever for hosts whose heap is slow at the allocate-and-free of an output-sized
+    /// buffer; `docs/performance.md` records the measured effect. It is independent of
+    /// [`heap::retain_pages`](crate::heap::retain_pages), which is about the pages of a buffer the
+    /// caller allocates.
+    pub fn reuse_blob_memory(mut self) -> Result<Self> {
+        let blob = crate::PoolAllocator::new()?;
+        let workspace = crate::PoolAllocator::new()?;
+        // SAFETY: the two pools move into the network built from this option block, which is the
+        // only network that uses them, and they outlive its native handle. A fresh pair per builder
+        // keeps the pools exclusive to one network.
+        unsafe {
+            self.options.set_blob_allocator(&blob)?;
+            self.options.set_workspace_allocator(&workspace)?;
+        }
+        self.pools = Some(NetPools { blob, workspace });
+        Ok(self)
     }
     /// Starts from the supplied options; subsequent flags override only their field.
     /// Use `Options::native_defaults()` explicitly for the native preset.
@@ -118,6 +160,7 @@ impl NetBuilder {
             options,
             #[cfg(feature = "vulkan")]
             device: None,
+            pools: None,
         }
     }
     /// Overrides one boolean option and keeps every other field.
@@ -212,7 +255,15 @@ impl Net {
             options: Options::new()?,
             #[cfg(feature = "vulkan")]
             device: None,
+            pools: None,
         })
+    }
+    /// Reports whether the network takes intermediate-tensor memory from its own pools.
+    ///
+    /// [`NetBuilder::reuse_blob_memory`] installs the pools; a network built any other way reports
+    /// `false` and allocates that memory through the process heap.
+    pub fn reuses_blob_memory(&self) -> bool {
+        self.pools.is_some()
     }
     /// Runs owned inputs and returns validated, independently owned final buffers.
     ///
@@ -224,6 +275,10 @@ impl Net {
     /// [`infer_into`](Self::infer_into) and [`infer_borrowed_into`](Self::infer_borrowed_into) write
     /// into a caller buffer instead and allocate no data buffer, and
     /// [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
+    ///
+    /// The native network allocates its intermediate tensors per request as well.
+    /// [`NetBuilder::reuse_blob_memory`] gives those tensors a pool the network owns, which removes
+    /// that allocation on every host.
     ///
     /// ```
     /// let net = ncnn_rust::Net::builder()?.threads(1)?.load_bytes(
@@ -321,6 +376,7 @@ impl Net {
             guard: GuardState::new(),
             #[cfg(feature = "vulkan")]
             device: None,
+            pools: None,
             _thread: PhantomData,
         })
     }

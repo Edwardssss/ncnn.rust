@@ -47,6 +47,24 @@ vulkan` passed the 52 conformance cases, the four Vulkan contracts, the heap ret
 example printed the device line, `[5.0, 7.0, 9.0]` from a resident upload, and the pool allocator as
 32 bytes live against a 48-byte high-water mark.
 
+## Pooled request paths
+
+`api_benchmark pooled-request 200 65536` on the WSL2 guest and on the Windows host, five rotated
+rounds of 100 to 200 iterations each, medians in nanoseconds per request. Each column is one run of
+the mode, the WSL2 pair from one command and the Windows pair from another:
+
+| Form | WSL2 default | WSL2 pooled | Windows default | Windows pooled |
+|---|---:|---:|---:|---:|
+| `guard` | 27546 | 18308 | 104975 | 33679 |
+| `extract_owned` | 251569 | 24375 | 225228 | 112721 |
+| `infer_into` | 32288 | 25400 | 104164 | 40784 |
+| `infer_borrowed_into` | 24718 | 17602 | 43721 | 19169 |
+
+A separate probe attributed the default cost before the pools existed: on the Windows host the
+extractor itself costs 207 ns, an owned input costs 27.9 us, and the forward plus read-out costs 200
+to 290 us, while the same forward under light mode costs 16 to 44 us. The native intermediate-tensor
+allocation, not the wrapper, is what the pools remove.
+
 ## Windows heap and Vulkan runs
 
 The same heap probe on the Windows host that produced the allocator tables: two distinct 256 KB
