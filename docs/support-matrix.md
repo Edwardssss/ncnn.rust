@@ -8,17 +8,21 @@ reproduction logs live in the [evidence history](evidence-history.md).
 ## ncnn version matrix
 
 `ci/ncnn-versions.json` holds the pinned release and the dynamic entries the scheduled workflow
-resolves at run time. `.github/workflows/ncnn-matrix.yml` builds each version, runs the workspace
-tests, audits enabled C API declarations against generated bindings and defined symbols, and
-compares trained-model output with a native C++ reference built from the same SDK.
+resolves at run time. `.github/workflows/ncnn-matrix.yml` builds an SDK for each version. The pinned
+release runs the workspace tests, audits enabled C API declarations against generated bindings and
+defined symbols, and compares trained-model output with a native C++ reference built from the same
+SDK. Other entries report the declarations the pinned header needs that the build lacks, because the
+adapter is compiled against one release and cannot link another.
 
 | Entry | Resolution | Requirement |
 |---|---|---|
-| `pinned` | `20261020` | Must pass |
-| `latest` | Newest ncnn tag | Reported each run |
-| `previous` | Next distinct tag below the newest | Reported each run |
+| `pinned` | `20261020` | Tests, C API audit and model comparison must pass |
+| `latest` | Newest tag that is not already listed | Declaration gap reported each run |
+| `previous` | Next distinct tag below that one | Declaration gap reported each run |
 
-A matrix failure opens or updates a tracking issue.
+Because the pinned release is the newest tag today, `latest` and `previous` resolve to the two
+releases below it, so the matrix records how far back the pinned headers reach. A failure in a
+pinned row opens or updates a tracking issue.
 
 ## Targets
 

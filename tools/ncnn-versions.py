@@ -6,8 +6,10 @@ tag positions: `latest` is the newest tag and `previous` the next distinct tag
 below the newest that is not already listed.
 """
 import json
+import os
 import pathlib
 import sys
+import urllib.error
 import urllib.request
 
 CONFIG = pathlib.Path(__file__).resolve().parents[1] / "ci" / "ncnn-versions.json"
@@ -15,9 +17,21 @@ TAGS_URL = "https://api.github.com/repos/Tencent/ncnn/tags?per_page=100"
 
 
 def fetch_tags() -> list[str]:
-    request = urllib.request.Request(TAGS_URL, headers={"User-Agent": "ncnn-rust-ci"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return [entry["name"] for entry in json.load(response)]
+    headers = {"User-Agent": "ncnn-rust-ci", "Accept": "application/vnd.github+json"}
+    # The unauthenticated limit is per IP and hosted runners share addresses, so a token keeps
+    # the monthly run from failing on a rate limit it did not cause.
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(TAGS_URL, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return [entry["name"] for entry in json.load(response)]
+    except urllib.error.HTTPError as error:
+        print(f"Cannot list ncnn tags: {error.code} {error.reason}", file=sys.stderr)
+        if error.code in (403, 429):
+            print("Set GITHUB_TOKEN to raise the API rate limit", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def resolve() -> list[str]:
@@ -43,4 +57,6 @@ def resolve() -> list[str]:
 
 
 if __name__ == "__main__":
-    print(f"versions={json.dumps(resolve())}")
+    resolved = resolve()
+    print(f"versions={json.dumps(resolved)}")
+    print(f"pinned={resolved[0]}")

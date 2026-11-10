@@ -137,8 +137,8 @@ resident inference, guard descriptors, external buffer import, pipeline caches a
 rejection, and the same device repeats the whole conformance suite. A coverage job reports line
 coverage of the wrapper, and a nightly workflow fuzzes the text parameter loader and the bounded
 weight reader. A monthly version matrix reads `ci/ncnn-versions.json`, builds the pinned release plus
-the newest and previous tags, audits the enabled C API against generated bindings and library
-symbols, and compares trained-model output with a native C++ reference. `cargo test` covers the
+the two newest tags, runs the full suite and the native C++ model comparison on the pinned one, and
+reports the C API declarations the older builds lack. `cargo test` covers the
 in-repo conformance suite: operator families compared against Rust reference loops, one inference
 per layer type among the 108 the SDK ships, the public API paths that the families do not reach,
 and a zero-allocation steady-state gate. No external model files are needed.

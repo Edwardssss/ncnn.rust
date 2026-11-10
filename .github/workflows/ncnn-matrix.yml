@@ -12,17 +12,21 @@ permissions:
 env:
   NCNN_LINK_KIND: dylib
   NCNN_ALLOW_UNTESTED_VERSION: "1"
-  LIBCLANG_PATH: /usr/lib/llvm-18/lib
 
 jobs:
   resolve:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.plan.outputs.versions }}
+      pinned: ${{ steps.plan.outputs.pinned }}
     steps:
       - uses: actions/checkout@v7
       - name: Resolve version plan
         id: plan
+        env:
+          # The tag list comes from the GitHub API, whose unauthenticated limit is per IP and
+          # shared by hosted runners.
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 tools/ncnn-versions.py >> "$GITHUB_OUTPUT"
 
   compat:
@@ -58,7 +62,23 @@ jobs:
       - name: Build SDK
         run: python3 tools/build-ncnn-sdk.py "vendor/ncnn-${{ matrix.version }}" "$PWD/ncnn-${{ matrix.version }}"
 
+      # The adapter is written against one release, so an older SDK cannot link it. Those rows
+      # report which declarations the pinned header needs that the build lacks, which is the
+      # compatibility statement for that release.
+      - name: Report the declaration gap
+        if: matrix.version != needs.resolve.outputs.pinned
+        env:
+          NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+        run: |
+          {
+            echo "### ncnn ${{ matrix.version }}"
+            echo '```'
+            python3 tools/compat-gap.py --sdk "$NCNN_INSTALL_DIR"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Interface and numerical compatibility
+        if: matrix.version == needs.resolve.outputs.pinned
         env:
           NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
         run: |
@@ -66,6 +86,7 @@ jobs:
           python3 tools/check-coverage.py
 
       - name: Native reference and trained models
+        if: matrix.version == needs.resolve.outputs.pinned
         env:
           NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
         run: |
@@ -74,6 +95,12 @@ jobs:
           python3 tools/fetch-models.py
           cargo run -p ncnn-rust --example model_regression -- \
             target/model-fixtures "target/reference-${{ matrix.version }}/ncnn_cpu_reference"
+
+      - name: Require the pinned release to match
+        if: matrix.version == needs.resolve.outputs.pinned
+        env:
+          NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-${{ matrix.version }}
+        run: python3 tools/compat-gap.py --sdk "$NCNN_INSTALL_DIR" --require-compatible
 
       - name: Record result
         if: always()

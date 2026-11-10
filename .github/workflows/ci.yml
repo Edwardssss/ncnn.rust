@@ -437,7 +437,20 @@ jobs:
       - name: Report coverage
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo llvm-cov --workspace --lcov --output-path coverage.lcov --summary-only
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path coverage.lcov --fail-under-lines 85
+          cargo llvm-cov report --summary-only
+
+      # `--summary-only` alone produced an lcov with file totals and no `DA` records, which
+      # looked like a report while carrying no per-line data.
+      - name: Reject a report without line records
+        run: |
+          records="$(grep -c '^DA:' coverage.lcov || true)"
+          echo "per-line records: $records"
+          if [ "$records" -lt 1000 ]; then
+            echo "coverage.lcov carries no usable line records"
+            exit 1
+          fi
 
       - name: Upload the report
         uses: actions/upload-artifact@v4

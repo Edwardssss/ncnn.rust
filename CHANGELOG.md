@@ -12,13 +12,18 @@ library upgrade is a minor change of this crate.
 - CI compares the public API with the published release, resolves every documentation link and
   anchor offline, and a `v*` tag publishes both packages in dependency order before creating the
   GitHub release from the changelog section.
+
+### Changed
+
+- The coverage job writes an lcov with per-line records, prints the summary, fails below 85 percent
+  line coverage, and rejects a report without `DA` records.
+- The version matrix runs the suite and the model comparison on the pinned release and reports the
+  declaration gap for older tags, which cannot link an adapter written against the pinned headers.
+  Its tag listing sends `GITHUB_TOKEN`, so a shared runner address cannot exhaust the API limit.
 - A probe test prints the finiteness of three attention configurations. The `ubuntu-24.04-arm`
   runner matches x86-64 for the two-dimensional operand, while a three-dimensional operand with one
   channel returns `NaN` for one sequence row there, so the layer case uses the two-dimensional form
   and every case asserts finite output on every target again.
-
-### Changed
-
 - `Allocator::upload`, imports and command recording name the failing operation
   (`Error::NativeAt`), so a refused allocation reads as `Vulkan upload` instead of a bare status.
 - `docs/contracts.md`, `docs/troubleshooting.md` and `docs/evidence-history.md` record the measured
