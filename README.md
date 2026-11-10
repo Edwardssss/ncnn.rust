@@ -21,7 +21,7 @@ The repository contains two packages:
 - Zero-copy requests: `Mat::from_external`, `Extractor::input_borrowed` and `Net::infer_borrowed`
   submit caller memory without a copy.
 - Graph introspection: `Net::layers` and `Net::blobs` report the wiring, the shapes and the support
-  flags ncnn declares for each layer type.
+  flags ncnn declares for each layer type, and `layer_type_index` resolves a type name to its index.
 - Scoped read-only CPU output guards that reserve the network without copying.
 - Graph-bound endpoint tokens that reject foreign or reloaded graphs.
 - Tensors, image preprocessing, custom layers, readers and allocators, including in-place

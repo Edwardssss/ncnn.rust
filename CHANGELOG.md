@@ -12,6 +12,11 @@ library upgrade is a minor change of this crate.
 - `Net::layers` and `Net::blobs` describe the loaded graph: layer names, registered types, type
   indices, blob counts and the support flags ncnn declares per layer type, plus the wiring and
   recorded shape of every blob.
+- `LayerInfo` also carries the shape each layer recorded for its inputs and outputs, and
+  `layer_type_index` resolves a type name to the index the registry uses.
+- `ParamDict::kind` reports how an entry is stored through `ParamKind`, which is what a custom layer
+  needs before it picks a getter, and `version_number` returns the pinned release date as the integer
+  ncnn encodes.
 - Zero-copy input: `Mat::from_external` borrows caller storage, `Extractor::input_borrowed` submits it
   without a copy and `Net::infer_borrowed` bounds the borrow to one request.
 - Consuming tensor helpers that keep the storage a tensor already owns: `Mat::into_reshape` rewrites

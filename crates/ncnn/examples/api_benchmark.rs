@@ -91,8 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "gpu-transfer"
             | "gpu-resident"
             | "preprocess"
+            | "native-request"
     ) {
-        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, gpu-resident, or preprocess".into());
+        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, gpu-resident, preprocess, or native-request".into());
     }
     let iterations: usize = args
         .get(2)
@@ -115,6 +116,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if mode == "preprocess" {
         return preprocessing(iterations, elements);
+    }
+    if mode == "native-request" {
+        return native_request(iterations, elements);
     }
     let net = Net::builder()?
         .threads(1)?
@@ -152,6 +156,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{value}");
         }
     }
+    Ok(())
+}
+
+/// Runs the native C request path over the same graph, so the wrapper modes have a reference: the
+/// extractor is created per request, the input is borrowed, and the output is read into a reusable
+/// buffer. Exporting the network handle disables guarded output, which is why this mode owns its net.
+fn native_request(iterations: usize, elements: usize) -> Result<(), Box<dyn std::error::Error>> {
+    use ncnn_rust::sys;
+    let net = Net::builder()?.threads(1)?.load_bytes(
+        "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+        &[],
+    )?;
+    let values = vec![1f32; elements];
+    let mut buffer = vec![0f32; elements];
+    let mut request = || -> ncnn::Result<f32> {
+        let input = unsafe { Mat::from_external(&values, &[elements])? };
+        unsafe {
+            let ex = sys::ncnn_extractor_create(net.as_raw());
+            if sys::ncnn_extractor_input(ex, c"input".as_ptr(), input.as_raw()) != 0 {
+                sys::ncnn_extractor_destroy(ex);
+                return Err(ncnn::Error::NativeAt("native input", -1));
+            }
+            let mut output = std::ptr::null_mut();
+            let code = sys::ncnn_extractor_extract(ex, c"output".as_ptr(), &mut output);
+            if code != 0 {
+                sys::ncnn_extractor_destroy(ex);
+                return Err(ncnn::Error::NativeAt("native extract", code));
+            }
+            let code = sys::ncnn_rs_mat_read_f32(output, buffer.as_mut_ptr(), elements);
+            sys::ncnn_mat_destroy(output);
+            sys::ncnn_extractor_destroy(ex);
+            if code != 0 {
+                return Err(ncnn::Error::NativeAt("native read", code));
+            }
+        }
+        Ok(black_box(buffer[0] + buffer[elements - 1]))
+    };
+    for _ in 0..20 {
+        assert_eq!(request()?, 2.);
+    }
+    let start = Instant::now();
+    let mut checksum = 0.;
+    for _ in 0..iterations {
+        checksum += request()?;
+    }
+    let elapsed = start.elapsed();
+    assert_eq!(checksum, iterations as f32 * 2.);
+    println!(
+        "mode=native-request, elements={elements}, iterations={iterations}, ns_per_request={}, checksum={checksum}, scope=C_api_reference",
+        elapsed.as_nanos() / iterations as u128
+    );
     Ok(())
 }
 

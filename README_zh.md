@@ -17,7 +17,7 @@
 - 类型化张量访问：`ElementKind` 读写覆盖 FP16、BF16 与各整数位宽，`infer_stored` 保留层写出的元素宽度。
 - 批量张量、`flatten` 与 `with_packing` 布局改写，以及调用方持有存储时免拷贝的消费式助手（`into_normalized`/`into_reshape`）。
 - 零拷贝请求：`Mat::from_external`、`Extractor::input_borrowed` 与 `Net::infer_borrowed` 直接提交调用方内存。
-- 计算图自省：`Net::layers` 与 `Net::blobs` 报告连线、形状以及 ncnn 为每种层类型声明的支持标志。
+- 计算图自省：`Net::layers` 与 `Net::blobs` 报告连线、形状以及 ncnn 为每种层类型声明的支持标志，`layer_type_index` 把层类型名解析为索引。
 - 作用域内的只读 CPU 输出守卫，在不复制的前提下占用网络。
 - 绑定到计算图的端点令牌，拒绝来自其他图或重新加载后的图的令牌。
 - 张量、图像预处理、自定义层、读取器与分配器，包括就地归一化、像素输出、letterbox 与深度边距、仿射变换。

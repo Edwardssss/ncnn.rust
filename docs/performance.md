@@ -90,6 +90,27 @@ GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, 
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
 medians of 23.16 and 10.95 ms with steady medians of 5.53 and 5.52 ms.
 
+## Request path against the native C API
+
+`api_benchmark` also has a `native-request` mode that runs the C API request path over the same graph,
+so the wrapper modes have a reference in the same build. Medians at 65536 elements on one Windows
+host, minimum of two runs, against the C path that borrows its input and copies the output into a
+reusable buffer:
+
+| Mode | ns per request | relative |
+|---|---:|---:|
+| `native-request` | 25462 | 1.00 |
+| `owned-guard` (owned input, borrowed output) | 13720 | 0.54 |
+| `resolved-reused` (endpoint tokens, reusable buffer) | 19734 | 0.78 |
+| `owned-view` (owned input, independent owned output) | 107419 | 4.22 |
+| `copy` (two copies per request, the pessimistic mode) | 368352 | 14.47 |
+
+The ranking is the point, not the absolute values: the modes that reuse a buffer or borrow the output
+land at or below the C reference, and the mode that returns a fresh independently owned vector pays
+one allocation and one full copy of the output. A standalone measurement of a 256 KB `Vec` copy on the
+same host reported 77 to 108 us, which is the same order as the whole inference, so the owned-output
+form is dominated by allocator and memory behaviour rather than by the wrapper.
+
 ## Reproducing
 
 The tables come from a campaign harness that is maintained outside this repository. In-repo
@@ -98,6 +119,8 @@ commands cover the same code paths, so a change can be checked without it:
 ```sh
 python3 tools/fetch-models.py                                   # pinned fixtures into target/model-fixtures
 cargo run --release -p ncnn-rust --example api_benchmark         # per-request cost and allocation counts
+cargo run --release -p ncnn-rust --example api_benchmark -- native-request 300 65536
+cargo run --release -p ncnn-rust --example api_benchmark -- preprocess 200 65536
 cargo run --release -p ncnn-rust --example model_regression -- \
   target/model-fixtures target/cpu-reference/ncnn_cpu_reference  # native C++ versus Rust outputs
 cargo test --workspace --features vulkan                         # contracts and the conformance suite

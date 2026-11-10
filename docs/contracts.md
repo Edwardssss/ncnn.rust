@@ -56,11 +56,13 @@ when a tensor outlives the request or is shared between extractors.
 `Net::layers` and `Net::blobs` read the loaded graph through the adapter and copy every string, so the
 result survives later loads and extraction. Both calls require loaded parameters and weights, because
 the parameter text alone does not fix the layer instances. `LayerInfo` reports the registered type
-index, the blob counts on both sides and every support flag ncnn declares for a layer type, including the
-packing, INT8, tensor-storage and batch declarations; those flags
-describe the type rather than the kernel a graph selects at run time. `BlobInfo` reports the wiring,
-the recorded shape and `has_shape`, and the extents stay at zero until a graph resize or an input
-fixes the shape.
+index, the blob counts on both sides, the shape each layer recorded for its inputs and outputs, and
+every support flag ncnn declares for a layer type, including the
+packing, INT8, tensor-storage and batch declarations; those flags describe the type rather than the
+kernel a graph selects at run time. A layer that recorded no shape reports zero extents instead of
+failing the call. `layer_type_index` resolves a type name to the index those views report, which is
+the index that type-index registration replaces. `BlobInfo` reports the wiring, the recorded shape and
+`has_shape`, and the extents stay at zero until a graph resize or an input fixes the shape.
 
 ## Tensors
 
