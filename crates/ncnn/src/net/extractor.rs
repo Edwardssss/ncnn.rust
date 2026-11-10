@@ -191,7 +191,9 @@ impl Extractor<'_> {
     /// Submits a borrowed tensor without copying its storage.
     ///
     /// This is the zero-copy form of [`input`](Self::input): native input keeps a shallow handle,
-    /// so the tensor's buffer is read in place. The tensor must already hold unpacked FP32 storage.
+    /// so the tensor's buffer is read in place. The tensor must already hold unpacked FP32 storage,
+    /// and the network must run without light mode, because the native forward path reads a storage
+    /// refcount that an external tensor does not carry.
     ///
     /// # Safety
     ///
@@ -206,6 +208,14 @@ impl Extractor<'_> {
     ) -> Result<()> {
         let target = self.resolve(endpoint.into(), false)?;
         self.ensure_not_reserved()?;
+        // An external tensor carries no storage refcount, and the light-mode forward path reads that
+        // counter before it decides whether an in-place layer may write. Rejecting the combination
+        // keeps a safe request from reaching that native read.
+        if self._net.option(crate::CpuOption::LightMode)? != 0 {
+            return Err(Error::invalid(
+                "A borrowed input needs light mode off, because the native forward path reads the storage refcount that an external tensor does not have",
+            ));
+        }
         let info = mat.info();
         if !mat.f32_known || info.elemsize != 4 || info.elempack != 1 {
             return Err(Error::invalid(

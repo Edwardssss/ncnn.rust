@@ -593,6 +593,49 @@ impl Net {
         }
         Ok(collected)
     }
+    /// Runs one request over borrowed inputs and writes the outputs into a caller vector.
+    ///
+    /// This is the fused form of [`infer_borrowed`](Self::infer_borrowed) and
+    /// [`infer_into`](Self::infer_into): the inputs are read where the caller keeps them and the
+    /// outputs are appended to `buffer`, which keeps its capacity, so a steady-state loop allocates
+    /// no data buffers on either side. The range records and the borrow that resolves each name stay
+    /// as small per-request allocations. The returned ranges identify each output the same way
+    /// [`infer_into`](Self::infer_into) does, and a failure leaves the vector as it was before the
+    /// call.
+    ///
+    /// Light mode rejects a borrowed input, because the native forward path reads a storage refcount
+    /// that an external tensor does not carry; use [`infer_into`](Self::infer_into) there.
+    pub fn infer_borrowed_into(
+        &self,
+        inputs: &[(&str, &[f32], &[usize])],
+        outputs: &[&str],
+        buffer: &mut Vec<f32>,
+    ) -> Result<Vec<OutputRange>> {
+        let mut extractor = self.extractor()?;
+        let mut tensors = Vec::with_capacity(inputs.len());
+        for (_, values, dimensions) in inputs {
+            // SAFETY: `values` outlives this function, and neither the tensor nor the extractor
+            // leaves it, so every native read happens inside the borrow.
+            tensors.push(unsafe { Mat::from_external(values, dimensions)? });
+        }
+        for ((name, _, _), tensor) in inputs.iter().zip(&tensors) {
+            // SAFETY: `tensors` keeps the borrowed storage reachable until the extractions below
+            // finish, and the extractor does not outlive them.
+            unsafe { extractor.input_borrowed(*name, tensor)? };
+        }
+        buffer.clear();
+        let mut ranges = Vec::with_capacity(outputs.len());
+        for name in outputs {
+            let start = buffer.len();
+            let info = extractor.extract_append(*name, buffer)?;
+            ranges.push(OutputRange {
+                name: (*name).to_owned(),
+                info,
+                values: start..buffer.len(),
+            });
+        }
+        Ok(ranges)
+    }
     /// Loads text parameters through a data reader.
     ///
     /// The reader lets an application load from an archive or an embedded asset without arranging a

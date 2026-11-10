@@ -340,6 +340,61 @@ fn borrowed_inputs_run_without_copying() {
     );
     drop(tensor);
 
+    // The fused form borrows the input and appends the output to a caller vector, so a
+    // steady-state loop allocates on neither side.
+    let mut buffer = Vec::new();
+    let ranges = net
+        .infer_borrowed_into(&[("input", &values, &[4])], &["output"], &mut buffer)
+        .unwrap();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].name, "output");
+    assert_eq!(ranges[0].info.w, 4);
+    assert_eq!(&buffer[ranges[0].values.clone()], [0., 2., 0., 4.]);
+    let capacity = buffer.capacity();
+    net.infer_borrowed_into(&[("input", &values, &[4])], &["output"], &mut buffer)
+        .unwrap();
+    assert_eq!(
+        buffer.capacity(),
+        capacity,
+        "the buffer keeps its allocation across requests"
+    );
+    assert!(
+        net.infer_borrowed_into(&[("input", &values, &[3])], &["output"], &mut buffer)
+            .is_err(),
+        "the shape must match the slice"
+    );
+
+    // Light mode reaches a native refcount read that an external tensor does not carry, so the
+    // combination is rejected instead of reaching that path.
+    let light = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .option(ncnn_rust::CpuOption::LightMode, 1)
+        .unwrap()
+        .load_bytes(
+            "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+            &[],
+        )
+        .unwrap();
+    assert!(
+        light
+            .infer_borrowed(&[("input", &values, &[4])], &["output"])
+            .is_err(),
+        "light mode rejects a borrowed input"
+    );
+    // The owned form still runs there, because it hands over storage with a refcount.
+    assert_eq!(
+        light
+            .infer(
+                [("input", Mat::from_f32(&values, &[4]).unwrap())],
+                &["output"]
+            )
+            .unwrap()[0]
+            .values,
+        [0., 2., 0., 4.]
+    );
+
     let mismatch = unsafe { Mat::from_external(&values, &[3]) };
     assert!(mismatch.is_err(), "the shape must match the slice");
 }
