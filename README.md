@@ -14,6 +14,8 @@ The repository contains two packages:
 ## Features
 
 - Owned-input inference with final-vector or reusable-buffer output.
+- Typed tensor access: `ElementKind` readers and writers cover FP16, BF16 and the integer widths,
+  and `infer_stored` keeps the element width a layer wrote.
 - Scoped read-only CPU output guards that reserve the network without copying.
 - Graph-bound endpoint tokens that reject foreign or reloaded graphs.
 - Tensors, image preprocessing, custom layers, readers and allocators.

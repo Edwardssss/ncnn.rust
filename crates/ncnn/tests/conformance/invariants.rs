@@ -242,6 +242,18 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
 
     let mismatch = Mat::from_i8(&stored, &[3, 3, 1]).expect("typed input");
     assert_eq!(mismatch.to_i8().expect("typed round trip"), stored);
+
+    // One byte per element carries no sign, so the unsigned reader is the one that recovers a
+    // stored value above 127 while the signed reader reports it minus 256.
+    let unsigned = Mat::from_typed(ElementKind::U8, &[200, 0, 1, 255], &[2, 2]).expect("u8 input");
+    assert_eq!(
+        unsigned.to_f32_typed(ElementKind::U8).expect("u8 values"),
+        [200., 0., 1., 255.]
+    );
+    assert_eq!(
+        unsigned.to_i8().expect("signed reading"),
+        [200u8 as i8, 0, 1, 255u8 as i8]
+    );
     let error = mismatch
         .to_f32_typed(ElementKind::F32)
         .expect_err("f32 read of int8 storage");

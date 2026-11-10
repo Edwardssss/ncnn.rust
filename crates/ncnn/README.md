@@ -107,6 +107,13 @@ Exact affinity is an OS capability. Linux and Windows expose processor IDs and t
 reports `Error::Unsupported` for exact mask operations while core inference and physical-core
 queries remain separate.
 
+Quantized and half-precision outputs keep the width the producing layer wrote. `Net::infer_stored`
+returns `TensorInfo` and `Mat`, `Extractor::extract_stored` borrows one for the extractor scope and
+`Extractor::extract_stored_owned` returns independent storage, all readable through
+`Mat::to_f32_typed(kind)` or `Mat::to_i8()`. `Mat::from_typed` and `Mat::from_i8` build the same
+storage for an input side, and `ElementKind` names each format. `infer` converts to FP32 and stays
+the form for models that end in FP32.
+
 MSRV: Rust 1.85.1. License: BSD-3-Clause. Native ncnn retains its upstream license.
 
 ## Optional Vulkan
@@ -118,8 +125,9 @@ selection is explicit through `Net::builder()?.vulkan(device)`, and CPU stays th
 CPU-Mat inference on the selected device. Native per-layer CPU fallback remains possible.
 
 Resident `gpu::Tensor`, `Allocator`, blocking-completion `Command`, completed `TensorGuard`, cache
-persistence and unsafe same-device buffer imports are available. CPU extractor guards reject GPU
-networks. Nonblocking submission and arbitrary external device adoption are unavailable in the
+persistence and unsafe same-device buffer imports are available. FP32 extractor guards reject device
+networks, while stored extraction serves them because the download copy is detached from the pool
+allocator. Nonblocking submission and arbitrary external device adoption are unavailable in the
 pinned native API.
 
 ## Performance

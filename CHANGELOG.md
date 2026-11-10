@@ -21,7 +21,8 @@ library upgrade is a minor change of this crate.
 
 - `Allocator::upload`, imports and command recording name the failing operation
   (`Error::NativeAt`), so a refused allocation reads as `Vulkan upload` instead of a bare status.
-- `docs/contracts.md` records the measured device-memory exhaustion behaviour.
+- `docs/contracts.md`, `docs/troubleshooting.md` and `docs/evidence-history.md` record the measured
+  device-memory exhaustion behaviour, and `Mat::to_i8` states that it reads signed storage.
 
 ## 0.2.0 - 2026-11-10
 

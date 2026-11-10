@@ -113,12 +113,10 @@ the convolution itself write one-byte output.
 
 A device that refuses resident storage returns `Error::NativeAt("Vulkan upload", -1)`: ncnn
 translates `VK_ERROR_OUT_OF_DEVICE_MEMORY` into its own failure and writes `vkAllocateMemory failed`
-to stderr, so the code names the operation rather than the allocator result. The refusal leaves the
-allocator, the tensors it already returned and later requests usable: the measured run refused the
-23rd 256 MiB upload against a 5226 MiB heap budget, then downloaded the retained tensors, accepted a
-16-byte upload and completed a resident inference. `Allocator::tensor_bytes` reports live storage
-dropping to zero when the tensors are released while its second value keeps the high-water mark.
-Empty tensors are rejected before any native call.
+to stderr, so the error names the operation rather than the allocator result. The refusal leaves the
+allocator, the tensors it already returned and later requests usable, and `Allocator::tensor_bytes`
+keeps its high-water mark after the live value drops. Empty tensors are rejected before any native
+call. The [evidence history](evidence-history.md#device-memory-exhaustion) records the measurement.
 
 Device loss, driver reset and out-of-host-memory on a shared allocation are outside what the pinned
 API reports distinctly; they surface as the same native failure, and a device that no longer answers

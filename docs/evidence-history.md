@@ -116,6 +116,45 @@ options, and Rust outputs repeated exactly. Submitted nonempty native VkMat inte
 eleven documentation tests after the GPU ownership compile-fail case was added. Because native
 per-layer fallback is allowed, none of this establishes GPU placement for every layer.
 
+## Release 0.2.0 checks
+
+The 0.2.0 tag published both packages from a Windows host with `cargo publish -p ncnn-rust-sys`
+followed by `cargo publish -p ncnn-rust` once the index listed the first. A temporary crate outside
+the workspace depended on `ncnn-rust = "0.2.0"`, resolved both packages from the registry, compiled
+the adapters against the pinned SDK and printed the expected sum and INT8 round trip, which proves
+the published archives build without the repository. crates.io reported `0.2.0` as the maximum
+stable version for both packages afterwards.
+
+`Release` then ran from a `workflow_dispatch` of the existing `v0.2.0` tag. It matched the tag with
+the workspace version, skipped both packages because the versions already existed, and replaced the
+GitHub release body with the changelog section for that version.
+
+## Device memory exhaustion
+
+Measured on the Windows host with the RTX 3060 Laptop GPU through the pinned Vulkan SDK. The device
+reported a 5226 MiB heap budget. Uploading 256 MiB FP32 tensors and keeping every result alive
+succeeded 22 times, 5,905,580,032 bytes in total; the 23rd upload failed with `vkAllocateMemory
+failed -2` on stderr and `Error::NativeAt("Vulkan upload", -1)` in Rust. After the refusal the
+retained tensors still downloaded, a 16-byte upload succeeded, and a resident `BinaryOp` graph
+still returned `[5, 7, 9]`. `Allocator::tensor_bytes` reported both values equal at the high-water
+mark and the live value dropping to zero after the tensors were released. Device loss and driver
+reset were not exercised.
+
+The test run that started in a new process immediately after that probe failed 23 of 37 conformance
+cases and exited with status `0xC0000409`; the same command passed twice afterwards. A deliberate
+exhaustion therefore leaves the driver in a state that outlives the process, which is the reason the
+troubleshooting page sends an unattributable failure to device re-creation rather than to a retry.
+
+## Attention on native ARM64
+
+Dispatched `ci.yml` with `arm_mha_probe` on `ubuntu-24.04-arm` with the pinned SDK. The probe used
+three configurations of `MultiHeadAttention` with a two-dimensional (embedding, sequence) operand:
+`0=4 1=2 2=16`, `0=8 1=2 2=32` and `0=4 1=1 2=16`. All three returned finite values that match the
+x86-64 run exactly (`1.72267`, `15.747786` and `1.818392` as the leading values). Running the layer
+case with a three-dimensional `[4, 4, 1]` operand on the same runner returned `NaN` for the second
+sequence row, index 4 to 7 of sixteen, while the x86-64 run stayed finite. The case therefore uses
+the two-dimensional form, and no target carries an exemption any more.
+
 ## SDK patches in the measured builds
 
 Every measured build applied the two patches in `tools/patches/`, which

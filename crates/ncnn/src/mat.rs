@@ -210,6 +210,9 @@ impl Mat {
         }
     }
     /// Copies signed 8-bit values into a new quantized tensor.
+    ///
+    /// This is the signature `Quantize` produces; `Mat::from_typed` covers the unsigned
+    /// format and every other element width.
     pub fn from_i8(data: &[i8], dimensions: &[usize]) -> Result<Self> {
         let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), data.len()) };
         Self::from_typed(ElementKind::I8, bytes, dimensions)
@@ -285,6 +288,10 @@ impl Mat {
         Ok(values)
     }
     /// Copies signed 8-bit quantized values without going through FP32 storage.
+    ///
+    /// The tensor records one byte per element but not whether the byte is signed, so this
+    /// reads the storage as `I8`: a stored `200` returns `-56`. Read unsigned one-byte
+    /// storage with [`to_f32_typed(ElementKind::U8)`](Self::to_f32_typed) instead.
     pub fn to_i8(&self) -> Result<Vec<i8>> {
         Ok(self
             .to_f32_typed(ElementKind::I8)?

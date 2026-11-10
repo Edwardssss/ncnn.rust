@@ -50,6 +50,11 @@ contracts or the native adapter require:
 - A focused comparison run when timings or copy paths change
 - An updated document when a contract in `docs/` changes
 
+The `Semver checks` job compares the public API with the published release, so a breaking change
+carries the version bump that allows it in the same pull request. The `Documentation links` job
+resolves every local Markdown target and anchor, so a moved or renamed page updates the links that
+point at it.
+
 New operators or parameters belong in `tools/patches/`-aware comparison cases or in the in-repo
 conformance suite under `crates/ncnn/tests/conformance/`. The conformance suite needs no
 downloaded fixtures; add a family entry there when a layer gains a validated reference loop.

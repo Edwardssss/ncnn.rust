@@ -79,6 +79,18 @@ recorded in the [layer coverage](layer-coverage.md) page.
 makes the conformance suite repeat on the default device, so a device-free machine skips nothing
 until that variable is set.
 
+## A resident upload fails with `Vulkan upload returned -1`
+
+**Symptom:** `Allocator::upload`, `import_buffer` or `Command::extract` returns
+`Error::NativeAt("Vulkan upload", -1)` while ncnn writes `vkAllocateMemory failed` to stderr.
+
+**Cause:** the device heap cannot serve the request. ncnn reports its own failure code rather than
+the Vulkan result, so the message names the operation and leaves the cause on stderr.
+
+**Fix:** release tensors that are no longer needed and retry; the allocator, the tensors that are
+still alive and the network stay usable after a refusal. Long sessions that cannot attribute a
+failure re-create the device and its allocator, because a lost device reports the same code.
+
 ## Outputs come back as errors instead of values
 
 **Symptom:** `infer` or `extract_owned` fails with a message about 32-bit storage.
