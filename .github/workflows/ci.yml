@@ -98,11 +98,13 @@ jobs:
           DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo test --workspace
 
-      - name: Example
+      - name: Examples
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
           DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo run -p ncnn-rust --example add
+        run: |
+          cargo run -p ncnn-rust --example add
+          cargo run -p ncnn-rust --example typed_tensors
 
       # A second pass catches state that only breaks after the first one.
       - name: Repeat the suite
@@ -110,6 +112,15 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo test --workspace
+
+      # The Documentation workflow deploys on main, so the link check for a pull request belongs
+      # here rather than in the deploy.
+      - name: Check rustdoc
+        if: runner.os == 'Linux'
+        env:
+          RUSTDOCFLAGS: -D warnings
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo doc --workspace --no-deps
 
       # The generated INT8/operator fixtures compare Rust against a standalone C++
       # reference built from the same SDK, without downloading trained models.
@@ -333,6 +344,14 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
         run: cargo clippy --workspace --all-targets --features vulkan -- -D warnings
+
+      # Both examples reach the device, so they run where one exists.
+      - name: Vulkan examples
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: |
+          cargo run -p ncnn-rust --features vulkan --example add -- --vulkan
+          cargo run -p ncnn-rust --features vulkan --example vulkan_resident
 
   # Line coverage of the Rust wrapper, reported as an artifact. The FFI adapters and the
   # native library stay outside the report, so the number describes the safe layer.
