@@ -93,8 +93,13 @@ storage this crate owns: an adopted raw handle or an external buffer is refused 
 and `deep_clone` produces a writable copy. The rule keeps a caller-managed allocation out of reach of
 a native writer. `into_normalized` and `into_reshape` consume the tensor, which is what makes the
 mutation sound: no other reference to the storage exists afterwards, so the native call runs on it
-instead of on a duplicate. `normalize_in_place` applies the same per-channel view as `normalized`, so
-both forms agree on tensors below three dimensions.
+instead of on a duplicate.
+
+The normalization applies the scale and bias that the native `Scale` path derives from `mean` and
+`norm`, which is `value * norm` with `-mean * norm` as the bias per channel, and `value - mean` when
+only `mean` is given. The wrapper writes it in one pass over the destination instead of copying and
+then running a native layer, so the arithmetic matches while the last bit can differ from the native
+layer when the compiler contracts the multiply and the add.
 
 A batched tensor stores `n > 1` planes per channel. Construction, `TensorInfo::n` and the copying
 readers cover the batch count; the arithmetic helpers, normalization and reshape stay single batch.

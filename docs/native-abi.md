@@ -15,6 +15,10 @@ Project adapter names use `ncnn_rs_`. The adapter compiles against the selected 
 - `ncnn_rs_net_load_file` owns the mapped-loading switch, so the safe file loaders read through stdio while the mapped path stays an explicit unsafe opt-in. It widens a UTF-8 path on Windows, because the narrow native loaders cannot open a non-ASCII path there.
 - `ncnn_rs_mat_flatten` disables the packing layout for the call, because the native kernel would otherwise return a packed one-dimensional tensor that the plain FP32 readers cannot read.
 - `ncnn_rs_mat_normalize_in_place` applies the same channel view as `ncnn_rs_mat_normalized`, so the copying and the in-place form normalize below three dimensions identically.
+- Both normalization adapters compute the scale and bias of the native `Scale` path in one loop over
+the destination. The native `Mat::substract_mean_normalize` creates a `Bias` or `Scale` layer, loads
+its parameters and weights and builds a pipeline on every call, which dominates the arithmetic for
+the tensor sizes a request uses.
 - C extraction creates an output handle on failure. Rust releases it before returning an error.
 - The C Mat-array ModelBin constructor passes a temporary vector's storage to a retaining reader. The project adapter owns its vector.
 - The built-in layer C load-model callback treats a C handle as a C++ ModelBin object. The project adapter unwraps `pthis` explicitly.

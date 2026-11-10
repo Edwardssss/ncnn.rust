@@ -46,7 +46,9 @@ submission and fence wait, which both paths perform.
 
 ## Preprocessing and lifecycle
 
-Median microseconds:
+`cargo run --release -p ncnn-rust --example api_benchmark -- preprocess 200 65536` reports one
+median per helper on the host that runs it. The recorded campaign medians, in microseconds, for
+65536 FP32 elements:
 
 | Operation | native in place or shared | native independent storage | ncnn-rust |
 |---|---:|---:|---:|
@@ -57,13 +59,30 @@ Median microseconds:
 | RGB conversion and resize | 107.121 | 107.121 | 103.260 |
 
 Normalization and reshape in `ncnn-rust` return independent storage, so the matching native
-reference is the independent column; those rows sit within the campaign spread of it. The gap against
-the in-place column is the cost of one full-tensor copy, not wrapper overhead. A measurement of a
-`1x224x224x3` FP32 tensor on one host puts the normalization pass at 12 us, a copy of the same tensor
-at 43 to 50 us, and the copy plus the pass at 65 us, where the copy is dominated by the fresh
-allocation and its first touch rather than by the arithmetic. `Mat::normalize_in_place` and
-`Mat::into_normalized` reach the in-place figure for storage the caller owns, and `Mat::into_reshape`
-returns the aliasing reshape for the cost of a header update.
+reference is the independent column; those rows sit within the campaign spread of it. The gap
+against the in-place column is the cost of one full-tensor copy, not wrapper overhead.
+
+The in-repo benchmark separates the same helpers, taken on one Windows host and reported as the
+minimum of three runs to limit host noise:
+
+| Helper | median us | note |
+|---|---:|---|
+| borrow (`from_external`) | 0.083 | header only |
+| `deep_clone` | 13.309 | allocation and one copy |
+| `reshape` | 12.174 | detaches because the native result aliases |
+| `into_reshape` | 0.174 | rewrites the header |
+| `normalized` | 13.328 | one pass into fresh storage |
+| `normalize_in_place` | 4.910 | the same pass, resident storage |
+| `flatten` | 0.984 | |
+| `with_packing(4)` | 1.115 | |
+| `copy_make_border` | 23.797 | 1 MB output |
+| `to_pixels` | 36.776 | |
+| `warp_affine` | 251.441 | bilinear, full frame |
+
+`normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one pass
+over the destination, so the copying form costs what a bare `deep_clone` costs instead of a clone
+followed by a native layer that walks the buffer again. Allocation and first touch dominate every row
+that allocates, which is why a rotation of the cases and a minimum over runs is used.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request

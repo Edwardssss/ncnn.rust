@@ -45,6 +45,9 @@ library upgrade is a minor change of this crate.
 - `Mat::normalize_in_place` applies the same per-channel view as `Mat::normalized`, so both forms
   agree on tensors below three dimensions, which the native call otherwise treats as per-row
   coefficients.
+- Normalization writes one pass over the destination instead of copying and then running a native
+  `Scale` layer, so `Mat::normalized` costs about as much as a bare clone. The scale and bias match
+  the native layer; the last bit can differ when the compiler contracts the multiply and the add.
 - `Mat::flatten` returns unpacked storage, so its result reads through `Mat::to_f32` without a typed
   conversion.
 - `DataReader::from_bytes` builds a bounded memory reader: a read is clamped to the bytes that
