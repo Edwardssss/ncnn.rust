@@ -322,6 +322,10 @@ fn graph_description_matches_the_parameter_text() {
     );
     assert_ne!(layers[0].typeindex, layers[2].typeindex);
     assert!(
+        !layers[2].support_any_packing || layers[2].support_packing,
+        "any packing implies the plain packing flag"
+    );
+    assert!(
         !layers[2].support_vulkan_packing || layers[2].support_vulkan,
         "packed Vulkan implies plain Vulkan"
     );

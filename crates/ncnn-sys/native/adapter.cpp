@@ -658,6 +658,11 @@ extern "C" int ncnn_rs_net_layer_info(ncnn_net_t net, int index, const char** na
         if (layer->support_bf16_storage) bits |= 1 << 4;
         if (layer->one_blob_only) bits |= 1 << 5;
         if (layer->support_inplace) bits |= 1 << 6;
+        if (layer->support_any_packing) bits |= 1 << 7;
+        if (layer->support_vulkan_any_packing) bits |= 1 << 8;
+        if (layer->support_int8_storage) bits |= 1 << 9;
+        if (layer->support_tensor_storage) bits |= 1 << 10;
+        if (layer->support_batch) bits |= 1 << 11;
         *flags = bits;
         return 0;
     }

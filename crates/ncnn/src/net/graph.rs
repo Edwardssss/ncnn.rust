@@ -35,6 +35,16 @@ pub struct LayerInfo {
     pub one_blob_only: bool,
     /// Computes in place on its input blob.
     pub support_inplace: bool,
+    /// Accepts a bottom blob whose layout has any element packing.
+    pub support_any_packing: bool,
+    /// Accepts any element packing on a device.
+    pub support_vulkan_any_packing: bool,
+    /// Accepts INT8 storage.
+    pub support_int8_storage: bool,
+    /// Accepts the shader tensor storage layout.
+    pub support_tensor_storage: bool,
+    /// Accepts a batch count above one.
+    pub support_batch: bool,
 }
 
 /// One blob of a loaded network.
@@ -127,6 +137,11 @@ impl Net {
             support_bf16_storage: flags & (1 << 4) != 0,
             one_blob_only: flags & (1 << 5) != 0,
             support_inplace: flags & (1 << 6) != 0,
+            support_any_packing: flags & (1 << 7) != 0,
+            support_vulkan_any_packing: flags & (1 << 8) != 0,
+            support_int8_storage: flags & (1 << 9) != 0,
+            support_tensor_storage: flags & (1 << 10) != 0,
+            support_batch: flags & (1 << 11) != 0,
         })
     }
     /// Describes every blob of the loaded network in graph order.
