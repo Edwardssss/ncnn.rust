@@ -93,23 +93,24 @@ medians of 23.16 and 10.95 ms with steady medians of 5.53 and 5.52 ms.
 ## Request path against the native C API
 
 `api_benchmark` also has a `native-request` mode that runs the C API request path over the same graph,
-so the wrapper modes have a reference in the same build. Medians at 65536 elements on one Windows
-host, minimum of two runs, against the C path that borrows its input and copies the output into a
-reusable buffer:
+so the wrapper modes have a reference in the same build. At 65536 elements on one Windows host, one
+run, against the C path that borrows its input and copies the output into a reusable buffer:
 
-| Mode | ns per request | relative |
-|---|---:|---:|
-| `native-request` | 25462 | 1.00 |
-| `owned-guard` (owned input, borrowed output) | 13720 | 0.54 |
-| `resolved-reused` (endpoint tokens, reusable buffer) | 19734 | 0.78 |
-| `owned-view` (owned input, independent owned output) | 107419 | 4.22 |
-| `copy` (two copies per request, the pessimistic mode) | 368352 | 14.47 |
+| Mode | ns per request | Rust allocations per request | note |
+|---|---:|---:|---|
+| `native-request` | 25462 | none | C API reference |
+| `owned-guard` (owned input, borrowed output) | 13720 | 2 small | no output copy |
+| `resolved-reused` (endpoint tokens, reusable buffer) | 19734 | 0 | allocation-free steady state |
+| `owned-view` (owned input, independent owned output) | 107419 | 1 x 262 KB | one allocation and copy of the output |
+| `copy` (double-copy stress mode) | 368352 | 4 x 262 KB | input clone plus output clone |
 
-The ranking is the point, not the absolute values: the modes that reuse a buffer or borrow the output
-land at or below the C reference, and the mode that returns a fresh independently owned vector pays
-one allocation and one full copy of the output. A standalone measurement of a 256 KB `Vec` copy on the
-same host reported 77 to 108 us, which is the same order as the whole inference, so the owned-output
-form is dominated by allocator and memory behaviour rather than by the wrapper.
+The allocation counts are the reproducible part: timing on a loaded host drifts by several times
+between runs of the same mode, while the zero-allocation and copy counts do not move. The modes that
+borrow the output or reuse a buffer land at or below the C reference, and the mode that returns a
+fresh independently owned vector pays one allocation and one full copy of the output. A standalone
+measurement of a 256 KB `Vec` copy on the same host reported 77 to 108 us, the same order as the whole
+inference, so the owned-output form is dominated by allocator and memory behaviour rather than by the
+wrapper.
 
 ## Reproducing
 
