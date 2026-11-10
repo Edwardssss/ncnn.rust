@@ -148,6 +148,11 @@ impl Extractor<'_> {
     }
 
     /// Consumes an owned input, copying raw-adopted storage.
+    ///
+    /// The tensor's storage is transferred when the crate created or independently cloned it, and
+    /// copied when it came from a raw handle, because the caller keeps managing that storage. The
+    /// endpoint resolves to a graph input; a reserved network rejects the call until its scoped
+    /// output drops.
     pub fn input<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>, mat: Mat) -> Result<()> {
         let target = self.resolve(endpoint.into(), false)?;
         self.ensure_not_reserved()?;
@@ -171,6 +176,9 @@ impl Extractor<'_> {
         }
     }
     /// Submits inputs in order; earlier inputs stay cached on failure.
+    ///
+    /// An error stops the sequence, and the inputs already submitted remain applied, so a caller
+    /// that retries continues from the failing entry rather than from the start.
     pub fn inputs<'a>(
         &mut self,
         inputs: impl IntoIterator<Item = (impl Into<Endpoint<'a>>, Mat)>,
@@ -181,6 +189,12 @@ impl Extractor<'_> {
         Ok(())
     }
     /// Borrows eligible CPU output through a scoped guard.
+    ///
+    /// The guard reserves the network for its lifetime, so no other extractor starts and no input
+    /// replacement happens until it drops. Eligibility needs the low-copy path: safe options before
+    /// loading, no raw handle exports, and one live extractor. A device network uses
+    /// [`extract_stored`](Self::extract_stored) instead, and networks that miss the requirements use
+    /// [`extract_owned`](Self::extract_owned).
     pub fn extract<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<OutputGuard<'_>> {
         self.ensure_borrowable(false)?;
         let target = self.resolve(endpoint.into(), true)?;
@@ -239,6 +253,11 @@ impl Extractor<'_> {
         mat.deep_clone()
     }
     /// Returns validated values with independent owned storage.
+    ///
+    /// This is the form that works for every network, including device networks, networks with
+    /// exported raw handles and networks with more than one live extractor. It converts the output
+    /// to FP32 and copies it, so a quantized model needs
+    /// [`extract_stored_owned`](Self::extract_stored_owned).
     pub fn extract_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<FinalOutput> {
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, false)?;
@@ -248,6 +267,10 @@ impl Extractor<'_> {
         })
     }
     /// Replaces a caller vector with the output and returns its shape metadata.
+    ///
+    /// The vector keeps its capacity across calls, which is what makes the steady-state path
+    /// allocation-free. A failure leaves the vector empty because the replacement starts before the
+    /// native copy.
     pub fn extract_into<'a>(
         &mut self,
         endpoint: impl Into<Endpoint<'a>>,
@@ -260,6 +283,10 @@ impl Extractor<'_> {
         Ok(info)
     }
     /// Appends the output to a caller vector and returns its shape metadata.
+    ///
+    /// Existing values stay in place, so several outputs concatenate in call order. A failure
+    /// leaves the vector as it was before the call, which makes this the building block behind
+    /// [`Net::infer_into`](crate::Net::infer_into).
     pub fn extract_append<'a>(
         &mut self,
         endpoint: impl Into<Endpoint<'a>>,
@@ -348,26 +375,49 @@ pub struct OutputGuard<'extractor> {
 
 impl OutputGuard<'_> {
     /// Returns the borrowed tensor metadata.
+    ///
+    /// The metadata describes the layout the native extractor produced: extents, `elemsize`,
+    /// `elempack` and the channel stride. `elemsize` decides which reader applies.
     pub fn info(&self) -> crate::TensorInfo {
         self.mat.info()
     }
     /// Borrows contiguous unpacked storage with an FP32 interpretation.
+    ///
+    /// The borrow needs aligned, unpacked, single-batch storage whose channels are adjacent, so a
+    /// 16-bit or packed output returns [`Error::Invalid`](crate::Error::Invalid) with the stored
+    /// width in the message. A multi-channel output with padded planes needs
+    /// [`channel_f32`](Self::channel_f32) or [`to_f32`](Self::to_f32).
     pub fn as_f32_slice(&self) -> Result<&[f32]> {
         self.mat.as_f32_slice()
     }
     /// Borrows one channel, skipping inter-channel padding.
+    ///
+    /// ncnn pads each channel plane, so this returns the logical elements of `channel` without the
+    /// padding a whole-tensor slice would include. An index outside the channel count returns
+    /// [`Error::Invalid`](crate::Error::Invalid).
     pub fn channel_f32(&self, channel: usize) -> Result<&[f32]> {
         self.mat.channel_f32(channel)
     }
     /// Copies into storage that outlives the guard, extractor and network.
+    ///
+    /// The copy keeps the element width, so a quantized output stays readable through
+    /// [`Mat::to_i8`](crate::Mat::to_i8) after the next request has run.
     pub fn detach(&self) -> Result<Mat> {
         self.mat.deep_clone()
     }
     /// Copies logical FP32 elements into a new vector.
+    ///
+    /// Native padding is excluded, so the length is the product of the reported extents. Quantized
+    /// and half-precision outputs convert here; use [`to_f32_typed`](Self::to_f32_typed) to name a
+    /// 16-bit format.
     pub fn to_f32(&self) -> Result<Vec<f32>> {
         self.mat.to_f32()
     }
     /// Copies any scalar format into FP32 values, including quantized outputs.
+    ///
+    /// The tensor records an element width without a format tag, so a 16-bit output needs the
+    /// caller to say whether it holds IEEE half or bfloat16. A width that disagrees with `kind`
+    /// returns [`Error::Invalid`](crate::Error::Invalid).
     pub fn to_f32_typed(&self, kind: crate::ElementKind) -> Result<Vec<f32>> {
         self.mat.to_f32_typed(kind)
     }

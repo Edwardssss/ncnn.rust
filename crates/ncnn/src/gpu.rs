@@ -6,12 +6,16 @@ use crate::{sys, Error, Result};
 use std::{ffi::CStr, marker::PhantomData, rc::Rc, sync::OnceLock};
 
 /// Storage and arithmetic policy requested from the Vulkan backend.
+///
+/// The variant is a request, not a guarantee: ncnn keeps its own capability dispatch, so a device
+/// without half-precision support stays on FP32.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum Precision {
     /// Requests FP32 storage and arithmetic.
     Fp32,
-    /// Native capability checks can retain FP32 on unsupported devices.
+    /// Requests FP16 storage and arithmetic; native capability checks can retain FP32 on
+    /// unsupported devices.
     Fp16,
 }
 
@@ -56,6 +60,10 @@ fn initialize() -> Result<()> {
 
 impl Device {
     /// Enumerates available devices without silently substituting the CPU backend.
+    ///
+    /// The order is the native one and matches the index [`Device::new`] accepts. An empty vector
+    /// means no driver or ICD is visible, which is a missing capability rather than an empty device
+    /// list to fall back from.
     pub fn enumerate() -> Result<Vec<DeviceInfo>> {
         initialize()?;
         Ok((0..unsafe { sys::ncnn_rs_gpu_count() })
@@ -63,6 +71,9 @@ impl Device {
             .collect())
     }
     /// Selects one device by index after validating it.
+    ///
+    /// An index the driver does not expose returns [`Error::Unsupported`].
+    /// The native device outlives this handle: every network that selects it keeps a reference.
     pub fn new(index: usize) -> Result<Self> {
         initialize()?;
         let index =
@@ -77,7 +88,11 @@ impl Device {
             _thread: PhantomData,
         })
     }
-    /// Selects the native default device.
+    /// Selects the device the native runtime ranks first.
+    ///
+    /// ncnn scores the visible devices and picks one, so this is the portable choice for an
+    /// application that does not pin a GPU. Combine [`enumerate`](Self::enumerate) with
+    /// [`new`](Self::new) when a specific device matters.
     pub fn default_device() -> Result<Self> {
         initialize()?;
         let index = unsafe { sys::ncnn_rs_gpu_default() };
@@ -87,6 +102,8 @@ impl Device {
         Self::new(index as usize)
     }
     /// Returns the copied device metadata.
+    ///
+    /// The values are read once per call, so later driver-side changes are not observed.
     pub fn info(&self) -> DeviceInfo {
         Self::metadata(self.index)
     }
@@ -287,10 +304,18 @@ impl Tensor {
         TensorGuard { tensor: self }
     }
     /// Returns logical native storage bytes including native tensor padding.
+    ///
+    /// This is the amount the allocator accounts for, so it can exceed the element count times the
+    /// element width. [`Allocator::tensor_bytes`] sums the same figure.
     pub fn storage_bytes(&self) -> usize {
         unsafe { sys::ncnn_rs_gpu_tensor_bytes(self.raw) }
     }
     /// Downloads and synchronizes into detached CPU-owned FP32 storage.
+    ///
+    /// The call blocks and copies, which is the cost the performance page records as the
+    /// upload-download round trip. Read residency with [`TensorGuard::buffer_descriptor`] when the
+    /// values must stay on the device; a refusal is reported as
+    /// [`Error::NativeAt`] naming the operation.
     pub fn download(&self) -> Result<Mat> {
         let mut raw = std::ptr::null_mut();
         status(unsafe { sys::ncnn_rs_gpu_download(self.allocator.0.raw, self.raw, &mut raw) })?;
@@ -322,6 +347,10 @@ pub struct Command<'a> {
 }
 impl<'a> Command<'a> {
     /// Records one resident input for this command.
+    ///
+    /// The tensor must belong to the same device as the allocator, and inputs have to be recorded
+    /// before the first [`extract`](Self::extract). A rejected recording leaves the command in a
+    /// failed state that only dropping it resolves.
     pub fn input(&mut self, name: &str, tensor: &'a Tensor) -> Result<()> {
         if self.failed {
             return Err(Error::invalid("Recording failed and must be cancelled"));
@@ -342,6 +371,10 @@ impl<'a> Command<'a> {
         result
     }
     /// Records an output and returns its index in the completed output vector.
+    ///
+    /// The output storage belongs to the allocator from this call on, so it counts towards
+    /// [`Allocator::tensor_bytes`] before any work is submitted. Recording an output closes input
+    /// recording for this command.
     pub fn extract(&mut self, name: &str) -> Result<usize> {
         if self.failed {
             return Err(Error::invalid("Recording failed and must be cancelled"));
@@ -359,7 +392,10 @@ impl<'a> Command<'a> {
         Ok(self.outputs.len() - 1)
     }
     /// Submits recorded work and blocks for native fence completion.
-    /// A native recording failure cancels the command instead of submitting it.
+    ///
+    /// The returned tensors are completed and safe to read through
+    /// [`Tensor::download`] or [`Tensor::guard`]. A native recording failure cancels the command
+    /// instead of submitting it, so a failed record never reaches the device.
     pub fn wait(mut self) -> Result<Vec<Tensor>> {
         if self.failed {
             return Err(Error::invalid("Recording failed and must be cancelled"));

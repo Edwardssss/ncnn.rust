@@ -365,6 +365,11 @@ impl Mat {
     }
     /// Borrows contiguous, unpacked 32-bit storage with an FP32 interpretation.
     ///
+    /// The borrow needs single-batch storage whose channels are adjacent, which is the layout a
+    /// single-channel tensor or a network output without channel padding has. A packed, 16-bit or
+    /// batched tensor returns [`Error::Invalid`](crate::Error::Invalid), and a multi-channel tensor
+    /// with padded planes uses [`channel_f32`](Self::channel_f32) or [`to_f32`](Self::to_f32).
+    ///
     /// ```compile_fail
     /// let mat = ncnn_rust::Mat::from_f32(&[1.], &[1]).unwrap();
     /// let values = mat.as_f32_slice().unwrap();

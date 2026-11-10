@@ -1,9 +1,12 @@
 use crate::{error::status, sys, Error, Result};
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
+/// Identifies one native integer option.
+///
+/// Each variant maps to one field of the native option block;
+/// [`Options::set`](crate::Options::set) documents the accepted range per variant.
 #[derive(Clone, Copy, Debug)]
 #[repr(i32)]
-/// Identifies one native integer option.
 #[non_exhaustive]
 pub enum CpuOption {
     /// Native worker count.
@@ -218,7 +221,10 @@ impl Options {
         })
     }
     /// Overrides one independent native boolean without changing other preferences.
-    /// Enables or disables one boolean option.
+    ///
+    /// The flag maps to the same native field as the matching
+    /// [`CpuOption`](crate::CpuOption), so mixing the two forms for one field is allowed and the
+    /// later write wins.
     pub fn set_flag(&mut self, flag: OptionFlag, enabled: bool) -> Result<&mut Self> {
         self.set(flag.key(), i32::from(enabled))
     }
@@ -227,6 +233,13 @@ impl Options {
         self.get(flag.key()).map(|value| value != 0)
     }
     /// Writes one integer option after validating its range.
+    ///
+    /// [`CpuOption::Threads`](crate::CpuOption::Threads) must be positive,
+    /// [`CpuOption::FlushDenormals`](crate::CpuOption::FlushDenormals) stays within `0..=3`,
+    /// [`CpuOption::OpenmpBlocktime`](crate::CpuOption::OpenmpBlocktime) and
+    /// [`CpuOption::KvCacheSequenceHint`](crate::CpuOption::KvCacheSequenceHint) accept zero, and
+    /// the remaining keys accept `0` or `1`. The value reaches the native option block only after
+    /// those checks, so a rejected write leaves the block unchanged.
     pub fn set(&mut self, key: CpuOption, value: i32) -> Result<&mut Self> {
         match key {
             CpuOption::Threads if value < 1 => {
@@ -253,6 +266,8 @@ impl Options {
         Ok(self)
     }
     /// Reads one integer option.
+    ///
+    /// Reads come from the native block, so a value written through a raw handle is visible here.
     pub fn get(&self, key: CpuOption) -> Result<i32> {
         let mut value = 0;
         unsafe {

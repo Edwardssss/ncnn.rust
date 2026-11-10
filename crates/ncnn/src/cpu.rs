@@ -81,7 +81,11 @@ pub enum CpuQuery {
     ArmSveF32mm,
 }
 
-/// Returns the native answer for one query, zero when unsupported.
+/// Returns the native answer for one query, zero when the feature is unsupported.
+///
+/// The value is a native capability report rather than a Rust-side guess: counts and cache sizes
+/// come back as numbers, and a feature test returns `1` when the current CPU has it and `0`
+/// otherwise. Nothing here gates behavior; ncnn performs its own dispatch at run time.
 pub fn query(key: CpuQuery) -> i32 {
     unsafe { sys::ncnn_rs_cpu_query(key as i32) }
 }

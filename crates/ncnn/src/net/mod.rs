@@ -65,14 +65,28 @@ pub struct Net {
     device: Option<crate::gpu::Device>,
     _thread: PhantomData<Rc<()>>,
 }
-/// Configures a network and completes model loading in one operation.
+/// Configures a network and loads its model in one expression.
+///
+/// Each method changes one field and returns the builder, so a rejected value surfaces before any
+/// model is read. [`load_files`](Self::load_files) and [`load_bytes`](Self::load_bytes) consume the
+/// builder and return a [`Net`] whose options were applied through [`Net::configure`].
+///
+/// [`Net::builder`] starts from [`Options::new`], which disables light mode. Use
+/// [`with_options`](Self::with_options) with [`Options::native_defaults`] to keep the native preset
+/// instead.
 pub struct NetBuilder {
     options: Options,
     #[cfg(feature = "vulkan")]
     device: Option<crate::gpu::Device>,
 }
 impl NetBuilder {
-    /// Selects Vulkan with native per-layer CPU fallback for unsupported layers.
+    /// Selects Vulkan for the network this builder creates.
+    ///
+    /// The device is retained for the network's lifetime and has to be selected before parameters
+    /// load, which is why the builder offers it here. ncnn keeps per-layer CPU fallback, so this
+    /// selects a backend rather than guaranteeing GPU placement. FP32 output guards become
+    /// unavailable on a device network; [`Extractor::extract_stored`](crate::Extractor::extract_stored)
+    /// and [`Net::infer_stored`] still serve it.
     #[cfg(feature = "vulkan")]
     pub fn vulkan(mut self, device: crate::gpu::Device) -> Self {
         self.device = Some(device);
@@ -96,23 +110,36 @@ impl NetBuilder {
             device: None,
         }
     }
-    /// Overrides one boolean option.
+    /// Overrides one boolean option and keeps every other field.
     pub fn flag(mut self, flag: crate::OptionFlag, enabled: bool) -> Result<Self> {
         self.options.set_flag(flag, enabled)?;
         Ok(self)
     }
-    /// Overrides one integer option.
+    /// Overrides one integer option after validating its range.
+    ///
+    /// [`CpuOption::Threads`](crate::CpuOption::Threads) must be positive,
+    /// [`CpuOption::FlushDenormals`](crate::CpuOption::FlushDenormals) stays within `0..=3`,
+    /// [`CpuOption::OpenmpBlocktime`](crate::CpuOption::OpenmpBlocktime) and
+    /// [`CpuOption::KvCacheSequenceHint`](crate::CpuOption::KvCacheSequenceHint) accept `0`, and
+    /// other keys accept `0` or `1`. Anything else returns [`Error::Invalid`].
     pub fn option(mut self, key: crate::CpuOption, value: i32) -> Result<Self> {
         self.options.set(key, value)?;
         Ok(self)
     }
-    /// Sets the native worker count.
+    /// Sets [`CpuOption::Threads`](crate::CpuOption::Threads), the native worker count.
+    ///
+    /// A count of zero returns [`Error::Invalid`]; one thread runs the graph without native
+    /// workers, which is the setting the conformance suite uses.
     pub fn threads(self, count: usize) -> Result<Self> {
         let count = i32::try_from(count)
             .map_err(|_| Error::invalid("Thread count exceeds native range"))?;
         self.option(crate::CpuOption::Threads, count)
     }
-    /// Loads parameters and weights from files.
+    /// Loads text parameters and weights from files.
+    ///
+    /// The parameter file is the text form that begins with the `7767517` magic line. ncnn reads
+    /// each layer's weights in declaration order, so the two files must come from the same model.
+    /// A graph without weight layers accepts an empty weights file.
     pub fn load_files(
         self,
         parameters: impl AsRef<Path>,
@@ -123,7 +150,11 @@ impl NetBuilder {
         net.load_model_file(weights)?;
         Ok(net)
     }
-    /// Loads parameters and weights from memory.
+    /// Loads text parameters and weights from memory.
+    ///
+    /// `parameters` is the text form, not the binary form. Pass `&[]` for a graph whose layers
+    /// carry no weights. On an existing network, [`Net::load_param`] followed by
+    /// [`Net::load_model`] performs the same sequence.
     pub fn load_bytes(self, parameters: &str, weights: &[u8]) -> Result<Net> {
         let mut net = self.configured_net()?;
         net.load_param(parameters)?;
@@ -253,6 +284,9 @@ impl Net {
         Ok(ranges)
     }
     /// Creates an empty network with default options.
+    ///
+    /// The network holds no graph until parameters load. [`Net::builder`] wraps this call and the
+    /// configuration steps, which keeps a failure in one expression.
     pub fn new() -> Result<Self> {
         let options = Options::new()?;
         let raw = unsafe { sys::ncnn_net_create() };
@@ -274,7 +308,12 @@ impl Net {
             _thread: PhantomData,
         })
     }
-    /// Applies options to an unloaded network.
+    /// Applies an option set to a network that has not loaded parameters.
+    ///
+    /// The call copies the option block, so later writes to `options` do not reach this network.
+    /// Vulkan compute is forced off here because device selection goes through
+    /// `set_vulkan_device`, which retains the device object. A network that already selected a
+    /// device keeps it. Returns [`Error::Invalid`] once parameters have loaded.
     pub fn configure(&mut self, options: &Options) -> Result<()> {
         if self.loaded {
             return Err(Error::invalid("Configure before loading parameters"));
@@ -295,9 +334,15 @@ impl Net {
             .set(self.guard.low_copy.get() && options.low_copy.get());
         Ok(())
     }
-    /// Replaces the current graph and weights after validating the text string.
-    /// Load weights again before creating an extractor. Existing extractors must
-    /// be released before this mutable network operation.
+    /// Replaces the graph from text parameters.
+    ///
+    /// The text form begins with the `7767517` magic line. Loading releases the previous layers,
+    /// weights and cached blobs first, and a failure leaves the network empty instead of partially
+    /// loaded, so weights load again before the next extractor. Weights load afterwards through
+    /// [`load_model`](Self::load_model).
+    ///
+    /// Loading needs mutable access, which is what keeps live extractors and resolved endpoints out
+    /// of the replaced graph.
     pub fn load_param(&mut self, text: &str) -> Result<()> {
         let text = CString::new(text)?;
         self.clear();
@@ -313,11 +358,15 @@ impl Net {
         }
         result
     }
-    /// Loads text parameters from a file.
+    /// Reads the text form from a file and applies [`load_param`](Self::load_param).
     pub fn load_param_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
         self.load_param(&std::fs::read_to_string(path)?)
     }
-    /// Loads parameters from a binary buffer.
+    /// Loads parameters in the binary form that `ncnn2mem` writes.
+    ///
+    /// This path avoids parsing text at start-up. It clears the previous graph the same way
+    /// [`load_param`](Self::load_param) does, and weights still load through
+    /// [`load_model`](Self::load_model).
     pub fn load_param_binary(&mut self, data: &[u8]) -> Result<()> {
         self.clear();
         let result = unsafe {
@@ -332,8 +381,12 @@ impl Net {
         }
         result
     }
-    /// Loads weights once for the current parameters. Reload parameters before
-    /// replacing weights; detached outputs retain their independent storage.
+    /// Loads weights for the current parameters, once.
+    ///
+    /// ncnn reads each layer's weights in declaration order, so the buffer has to match the loaded
+    /// parameter text. Reload parameters before loading different weights. Detached outputs keep
+    /// their own storage after a later reload; borrowed ones do not, which the mutable borrow
+    /// already prevents.
     pub fn load_model(&mut self, data: &[u8]) -> Result<()> {
         if !self.loaded || self.ready {
             return Err(Error::invalid(
@@ -352,7 +405,7 @@ impl Net {
         }
         result
     }
-    /// Loads weights from a file.
+    /// Reads the weights from a file and applies [`load_model`](Self::load_model).
     pub fn load_model_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
         self.load_model(&std::fs::read(path)?)
     }
@@ -392,7 +445,12 @@ impl Net {
         }
         result
     }
-    /// Releases every layer and cached blob.
+    /// Releases every layer, weight and cached blob.
+    ///
+    /// Options and the device selection survive; loading parameters again rebuilds the graph and
+    /// weights must load again before extraction. Existing extractors and resolved endpoints have
+    /// to be dropped first, which the mutable borrow enforces, and a token from the cleared graph
+    /// is rejected rather than resolving to a new blob.
     pub fn clear(&mut self) {
         self.graph = Rc::new(());
         unsafe {
@@ -402,7 +460,11 @@ impl Net {
         self.ready = false;
     }
     /// Resolves an exposed graph input or output without retaining a CString.
-    /// Intermediate blobs are intentionally not accepted by this boundary.
+    ///
+    /// Resolution needs the loaded weights, because ncnn exposes its endpoint list only after the
+    /// graph is ready. Intermediate blobs are deliberately outside this boundary: extracting one
+    /// would depend on the layers between it and the outputs. The returned [`BlobId`] belongs to
+    /// this graph and stops resolving after a reload.
     pub fn resolve_blob(&self, name: &str) -> Result<BlobId> {
         if !self.ready {
             return Err(Error::invalid(
@@ -447,10 +509,14 @@ impl Net {
         Err(Error::invalid("Unknown graph input or output"))
     }
     /// Returns the input blob names in graph order.
+    ///
+    /// An entry without a name is reported as an empty string.
     pub fn input_names(&self) -> Vec<String> {
         self.endpoint_names(false)
     }
     /// Returns the output blob names in graph order.
+    ///
+    /// An entry without a name is reported as an empty string.
     pub fn output_names(&self) -> Vec<String> {
         self.endpoint_names(true)
     }
@@ -477,9 +543,13 @@ impl Net {
                 .collect()
         }
     }
-    /// Creates a fresh native inference cache. Use a new extractor for each
-    /// inference, including changed input shapes supported by the model. Feeding
-    /// another input into an existing extractor preserves cached downstream blobs.
+    /// Creates a fresh native inference cache for one request path.
+    ///
+    /// The native extractor caches intermediate blobs, so a changed input shape needs a new
+    /// extractor rather than a re-used one. Feeding another input into an existing extractor keeps
+    /// the cached downstream blobs, which is what the key/value cache tests rely on. The call needs
+    /// loaded weights, and a live scoped output reserves the network, so create the next extractor
+    /// after dropping the previous guard.
     pub fn extractor(&self) -> Result<Extractor<'_>> {
         if self.guard.output_borrowed.get() {
             return Err(Error::invalid("A scoped output reserves this network"));
