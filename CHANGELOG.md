@@ -5,7 +5,7 @@ All notable changes to this project are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release pins one ncnn release, so a
 library upgrade is a minor change of this crate.
 
-## Unreleased
+## 0.3.0 - 2026-11-11
 
 ### Added
 

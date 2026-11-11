@@ -154,8 +154,16 @@ that uses every core.
 ## Performance
 
 Wrapper cost is measured against the native C API from the same SDK in one process, so the tables
-isolate the binding rather than the engine. Median milliseconds per request, one thread, release
-build:
+isolate the binding rather than the engine. Every number below comes from one machine and one
+campaign; the medians move with host load, so compare rows rather than absolute values.
+
+> **Hardware:** AMD Ryzen 7 5800H (8 cores, 16 threads), 16 GB DDR4-3200, NVIDIA GeForce RTX 3060
+> Laptop GPU (6 GB, driver 596.49), Windows 10 22H2 build 19045, MSVC 19.50, Rust 1.96.1, ncnn
+> 20261020 built from source with the repository's build script. Vulkan rows run on the same GPU;
+> the Linux figures quoted in [Performance](docs/performance.md) come from a Debian WSL2 guest on
+> this machine with 8 logical cores.
+
+Trained models, median milliseconds per request, one thread, release build:
 
 | Model | Device | native | ncnn-rust | Delta |
 |---|---|---:|---:|---:|
@@ -165,9 +173,8 @@ build:
 | PP-OCRv5 recognition | Vulkan | 10.863 | 10.210 | within spread |
 
 The `ncnn-rust` column resolves endpoints once and fills a caller vector, which allocates nothing
-after warm-up. Returning an owned vector per request instead adds one output copy: 5.294 ms against
-4.702 ms on NanoDet Vulkan (+13%), whose six outputs total 235,200 values. The CPU figures move
-within the run-to-run spread, which the method section sets at 10%.
+after warm-up. A vector owned per request instead adds one output copy, which is why the reuse form
+is the one quoted; the CPU deltas sit inside the campaign's 10% run-to-run spread.
 
 A single-layer graph shows the same picture at microsecond scale, where the request path rather than
 the arithmetic dominates:
@@ -179,58 +186,24 @@ the arithmetic dominates:
 | ReLU | Vulkan | 0.193 ms | 0.197 ms |
 | AbsVal | Vulkan | 0.183 ms | 0.221 ms |
 
-Preprocessing and tensor lifecycle, median microseconds over 65536 FP32 elements, one core, minimum
-of three runs:
+The request path over one 65536-element FP32 tensor, median microseconds per request, one thread.
+The native reference creates one extractor, borrows its input and copies into a reusable buffer, the
+same work the first row performs:
 
-| Operation | ncnn-rust |
-|---|---:|
-| borrow (`Mat::from_external`) | 0.09 |
-| `deep_clone` | 11.6 |
-| `reshape` | 12.5 |
-| `into_reshape` | 0.19 |
-| `normalized` | 17.7 |
-| `normalize_in_place` | 4.7 |
-| `flatten` | 0.92 |
-| `with_packing(4)` | 0.91 |
-| `copy_make_border` | 34.5 |
-| `to_pixels` | 36.7 |
-| `warp_affine` | 250.2 |
+| Form | native | ncnn-rust | Delta |
+|---|---:|---:|---:|
+| borrowed input, reusable output buffer | 25.462 | 19.734 | -22% |
+| owned input, borrowed output view | 25.462 | 13.720 | -46% |
+| owned input, independent output | 25.462 | 107.419 | +322% |
+| cloned input, cloned output | 25.462 | 368.352 | +1347% |
 
-The forms that return independent storage pay one allocation and one copy: `normalized` lands at
-about 1.5 times a bare `deep_clone` and the in-place form at 4.7 microseconds, while `borrow`,
-`into_reshape`, `flatten` and `with_packing` rewrite or lend a header and stay under a microsecond.
-The native reference for the copying forms, including the independent-storage column, is in
-[Performance](docs/performance.md).
-
-A request also allocates inside the engine: `NetBuilder::reuse_blob_memory()` gives the network's
-intermediate tensors a pool it owns, which is the measured lever on both hosts, and the reuse forms
-(`infer_into`, `infer_borrowed_into`) remove the caller-side vector. Microseconds per 65536-element
-ReLU request, one core:
-
-| Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
-|---|---:|---:|---:|---:|
-| `guard` (borrowed output) | 24.2 to 25.6 | 16.4 to 17.0 | 97.4 | 30.1 |
-| `extract_owned` (owned output) | 220 to 225 | 22.8 to 22.9 | 194.8 | 84.4 |
-| `infer_into` (owned input, reused buffer) | 29.7 to 31.9 | 22.7 to 23.6 | 97.4 | 37.1 |
-| `infer_borrowed_into` (borrowed input and buffer) | 22.0 to 23.1 | 16.4 to 17.3 | 39.8 | 18.1 |
-
-The guest numbers are the range of three runs, the Windows numbers the minimum of three runs on a
-host that other work was using, so its absolute values move by up to twice between runs while the
-ratio holds: the owned-output form gains 2 to 10 times, and the borrowed-buffer form, which allocates
-nothing on the caller side, still gains a quarter on the guest and about half on the Windows host from
-the pooled intermediates. Linux hosts show the same ranking through page faults, and
-`ncnn_rust::heap::retain_pages()` keeps the pages of a caller-allocated buffer mapped. The
-[thread example](crates/ncnn/examples/threads.rs) covers the next lever: a network and its extractor
-per worker, measured below.
-
-One network per worker thread scales a service. On an 8-core WSL2 guest, four workers reach 105k
-requests per second against 38k for one worker, while a single network that uses every core lands at
-42k: the native thread pool and one worker on one thread cost nearly the same on a graph this small,
-and independent workers multiply the throughput. On a 16-core Windows host the same ranking holds at
-45k to 62k for four workers against 13k to 17k for one network over every core, with a much wider
-spread because that host was shared. The example reports the median of three rounds. The method, the
-full tables, the pooled, worker and Linux measurements and the reproduction commands are in
-[Performance](docs/performance.md).
+The first two rows hold every result where it already lives, so the wrapper stays below the C
+reference; the last two show what one and three extra copies of a 256 KB output cost on this host.
+That is why the reuse forms exist: `NetBuilder::reuse_blob_memory()` moves the engine's intermediate
+tensors into pools it owns, `infer_into` and `infer_borrowed_into` remove the caller vector, and
+`ncnn_rust::heap::retain_pages()` keeps a caller-allocated buffer's pages mapped on glibc. The
+per-helper preprocessing medians, the pooling comparison, the Linux page-fault campaign, the worker
+scaling and the reproduction commands are in [Performance](docs/performance.md).
 
 ## Documentation
 

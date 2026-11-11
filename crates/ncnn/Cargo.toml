@@ -17,7 +17,7 @@ default = []
 vulkan = ["ncnn-sys/vulkan"]
 
 [dependencies]
-ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.2.0" }
+ncnn-sys = { package = "ncnn-rust-sys", path = "../ncnn-sys", version = "0.3.0" }
 
 [dev-dependencies]
 mimalloc = "0.1.52"
