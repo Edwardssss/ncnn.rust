@@ -32,12 +32,16 @@ Behaviour that has changed between ncnn releases without a C API change:
 - **0.2.x to 0.3.0** — reusing one extractor now restarts the request. The native extractor caches
   the blobs a request produced, so a second `input` on the same handle used to answer from that
   cache; `input` and `input_borrowed` now restart first, and a caller that relied on the cache calls
-  `Extractor::continue_session` before the next input. Everything else in this release adds API:
+  `Extractor::continue_session` before the next input. Enabling light mode on a graph that reads one
+  blob from two layers now returns `Error::Invalid` through `Extractor::set_light_mode` and
+  `Net::extractor`, where it used to return the values of the first consumer; insert an explicit
+  `Split` layer to keep such a graph on light mode. Everything else in this release adds API:
   `Mat` sub views (`channel`, `channel_range`, `depth`, `depth_range`, `column_range`, `row_range`,
-  `batch`, `batch_range`) returning `MatView`, `Mat::is_empty`, `TensorInfo::total`,
-  `TensorInfo::shape`, the per-extractor settings (`set_light_mode`, the three allocators and the
-  cache length hint), `Extractor::clear` and `Net::layer_handle`. No signature changed, so an
-  existing caller compiles unchanged.
+  `batch`, `batch_range`) returning `MatView`, `MatView::as_mat`, `Mat::is_empty`,
+  `TensorInfo::total`, `TensorInfo::shape`, `Net::shared_blobs`, `Net::infer_view_into`, the
+  per-extractor settings (`set_light_mode`, the three allocators and the
+  cache length hint), `Extractor::clear` and `Net::layer_handle`. No signature changed except that
+  `Extractor::set_light_mode` now returns `Result`, so an existing caller compiles unchanged.
 - **Patch releases** never change the pinned ncnn release, the public API or the storage contracts.
 
 ## Compatibility with the native library
