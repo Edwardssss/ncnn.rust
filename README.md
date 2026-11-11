@@ -186,19 +186,26 @@ the arithmetic dominates:
 | ReLU | Vulkan | 0.193 ms | 0.197 ms |
 | AbsVal | Vulkan | 0.183 ms | 0.221 ms |
 
-The request path over one 65536-element FP32 tensor, median microseconds per request, one thread.
-The native reference creates one extractor, borrows its input and copies into a reusable buffer, the
-same work the first row performs:
+The request path over one 65536-element FP32 tensor, median microseconds per request, one thread,
+pinned to one core, nine runs on the Debian WSL2 guest. The native column runs the three steps of a
+request through the C API and hands the tensor back where the engine left it:
 
 | Form | native | ncnn-rust | Delta |
 |---|---:|---:|---:|
-| borrowed input, reusable output buffer | 25.462 | 19.734 | -22% |
-| owned input, borrowed output view | 25.462 | 13.720 | -46% |
-| owned input, independent output | 25.462 | 107.419 | +322% |
-| cloned input, cloned output | 25.462 | 368.352 | +1347% |
+| owned input, borrowed output view | 10.422 | 10.930 | +5% |
+| owned input, zero-copy owned output | 10.422 | 11.124 | +7% |
 
-The first two rows hold every result where it already lives, so the wrapper stays below the C
-reference; the last two show what one and three extra copies of a 256 KB output cost on this host.
+Both rows keep the result in the buffer the extractor already detached, so the wrapper adds the call
+and the endpoint resolution and nothing else. `Extractor::input` consumes the tensor, which releases
+the caller's reference before the request runs: a native request that keeps its input handle alive
+blocks the light-mode reuse of that buffer and costs twenty times as much on the guest, so the
+wrapper's fast shape is also its default shape.
+
+The forms that ask for a copy pay for one. A value vector per request allocates 256 KB on top of the
+native clone that `Extractor::extract` already performs, which costs 226 us on the guest against the
+10.9 us above, and a cloned input and output allocate two such buffers. [Performance](docs/performance.md)
+records both with their allocation counts, the native C references they compare against, and the
+glibc and NT heap behaviour that decides what a fresh 256 KB buffer costs.
 That is why the reuse forms exist: `NetBuilder::reuse_blob_memory()` moves the engine's intermediate
 tensors into pools it owns, `infer_into` and `infer_borrowed_into` remove the caller vector, and
 `ncnn_rust::heap::retain_pages()` keeps a caller-allocated buffer's pages mapped on glibc. The

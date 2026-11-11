@@ -913,6 +913,7 @@ impl Net {
             low_copy: Cell::new(true),
             extracted: Cell::new(false),
             continuation: Cell::new(false),
+            borrowed_input: Cell::new(false),
             light_mode: None,
             net_light_mode,
             blob_allocator: None,

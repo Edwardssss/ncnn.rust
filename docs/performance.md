@@ -92,30 +92,76 @@ medians of 23.16 and 10.95 ms with steady medians of 5.53 and 5.52 ms.
 
 ## Request path against the native C API
 
-`api_benchmark` also has a `native-request` mode that runs the C API request path over the same graph,
-so the wrapper modes have a reference in the same build. At 65536 elements on one Windows host, one
-run, against the C path that borrows its input and copies the output into a reusable buffer:
+`api_benchmark` also runs the native C API request path over the same graph, so the wrapper modes
+have a reference in the same build. Three references cover the shapes a request takes: a borrowed
+input read into a caller buffer (`native-request`), an owned input read into a caller buffer
+(`native-buffer`), and an owned input read in place through the pointer the handle carries
+(`native-owned`). The borrowed reference keeps light mode off, because a borrowed input cannot run it
+([Tencent/ncnn#1543](https://github.com/Tencent/ncnn/issues/1543)); the owned references enable the
+option, which is what the wrapper modes they compare against use.
 
-| Mode | ns per request | Rust allocations per request | note |
-|---|---:|---:|---|
-| `native-request` | 25462 | none | C API reference |
-| `owned-guard` (owned input, borrowed output) | 13720 | 2 small | no output copy |
-| `resolved-reused` (endpoint tokens, reusable buffer) | 19734 | 0 | allocation-free steady state |
-| `owned-view` (owned input, independent owned output) | 107419 | 1 x 262 KB | one allocation and copy of the output |
-| `copy` (double-copy stress mode) | 368352 | 4 x 262 KB | input clone plus output clone |
+Nine process runs per mode over one 65536-element FP32 tensor, one thread, pinned to one core. The
+Linux column is the median and the Windows column is the lowest run.
 
-The allocation counts are the reproducible part: timing on a loaded host drifts by several times
-between runs of the same mode, while the zero-allocation and copy counts do not move. The modes that
-borrow the output or reuse a buffer land at or below the C reference, and the mode that returns a
-fresh independently owned vector pays one allocation and one full copy of the output. A standalone
-measurement of a 256 KB `Vec` copy on the same host reported 77 to 108 us, the same order as the whole
-inference, so the owned-output form is dominated by allocator and memory behaviour rather than by the
-wrapper.
+| Mode | Windows ns | Linux ns | Rust allocations per request |
+|---|---:|---:|---:|
+| `native-request` (borrowed input, caller buffer) | 25586 | 23804 | none |
+| `native-buffer` (owned input, caller buffer) | 18764 | 18200 | none |
+| `native-owned` (owned input, read in place) | 12050 | 10422 | none |
+| `owned-guard` (owned input, borrowed output) | 12209 | 10930 | 2 small |
+| `guard-into` (guard consumed into an owned tensor) | 12197 | 10784 | 2 small |
+| `owned-mat` (owned input, zero-copy owned output) | 12927 | 11124 | 2 small |
+| `resolved-reused` (endpoint tokens, caller buffer) | 20121 | 18040 | 0 |
+| `borrowed-reused` (borrowed input, caller buffer) | 26404 | 23908 | 5 x 123 B |
+
+The two modes that allocate a data buffer per request sit in a different regime, so they are listed
+separately with the guest's median: `owned-view` (owned value vector, one 262 KB vector) 226298 ns,
+and `copy` (cloned input and output, two 262 KB buffers plus the native clone of the input)
+497350 ns. On the Windows host the same two modes measured anywhere between 19573 and 143391 ns, and
+between 386847 and 471300 ns: the heap alternates between recycled and freshly committed blocks, so a
+median there describes the host's page-commit state rather than the request path. The modes in the
+first table kept their ranking under the same alternation, and their spreads stayed inside a factor
+of three. The allocation counts are the reproducible part: the guard, the two owned-tensor forms and
+the two buffer forms allocate no data buffer, `owned-view` allocates the output vector, and `copy`
+allocates two data buffers plus the native clone its input needs.
+
+The table separates four effects.
+
+The wrapper matches the C API when both run the same steps. `guard-into`, `owned-mat` and
+`resolved-reused` land within one to seven percent of `native-owned` and `native-buffer` on both
+platforms, so the binding adds the call, the endpoint resolution and nothing else.
+
+The owned forms pay one native copy, and the wrapper adds none. `Extractor::extract` deep-clones an
+output whose storage comes from the network's local blob pool (`src/net.cpp`, the branch that
+detaches the result so it can outlive the network), and that pool is the default. The clone is
+therefore the copy an independent tensor costs; `extract_mat`, `extract_stored_owned` and
+`into_mat` keep that buffer instead of duplicating it, which is why they hold no allocation of their
+own. The value-vector forms add a second buffer: `owned-view` allocates 262144 bytes per request on
+top of the native clone, which costs twenty times the owned-tensor form on the guest and more as soon
+as the Windows host leaves its fast heap state.
+
+A caller that keeps its native input handle alive defeats light-mode reuse. Measured on the guest
+with the same graph, submitting an owned tensor through the C API and dropping the caller's handle
+before the request costs 10.2 to 11.2 us; keeping the handle alive until after extraction costs 219
+to 251 us, because the input blob never reaches a refcount of zero and the layer output cannot reuse
+its buffer. `Extractor::input` consumes the tensor, so the wrapper cannot hit that state.
+
+The copies themselves are cheap and the allocator decides their cost. A standalone probe copies 256
+KB in 5.6 to 6.4 us on the Windows host and 6 us on the guest, while allocating and freeing a 256 KB
+buffer per request costs an order of magnitude more on a heap that returns freed pages to the
+kernel. Raising the glibc thresholds isolates the effect on the guest (default against
+`MALLOC_MMAP_THRESHOLD_=268435456` and `MALLOC_TRIM_THRESHOLD_=268435456`): `owned-view` drops from
+222878 ns to 16187 ns, `copy` from 489899 ns to 31019 ns, while `owned-guard` and `owned-mat` hold at
+about 10.4 us because they allocate no data buffer. At 1024 elements, where the same buffers come
+from recycled chunks, the four modes collapse to 1128, 1134, 1265 and 1565 ns. Windows has no
+equivalent setting, so the host that cannot raise a threshold picks a reuse form or an allocator that
+retains pages; `heap::retain_pages` reports `false` there and the crate's own test asserts both
+halves of that claim.
 
 A handle from `Net::extractor` restarts itself once a request extracted, because the native
 extractor caches the blobs it produced and would otherwise answer the next request from that cache.
 The restart costs one native extractor construction, which stays inside the run-to-run spread of the
-figures below; a caller that builds one handle per request never pays it, because a fresh handle has
+figures above; a caller that builds one handle per request never pays it, because a fresh handle has
 nothing to restart.
 
 ## Reusing native memory
@@ -124,24 +170,27 @@ The network allocates its intermediate tensors per request, and on a heap that r
 to the kernel that allocation costs more than the arithmetic. `NetBuilder::reuse_blob_memory` gives
 the network one pool allocator for intermediate blobs and one for layer workspace, so every
 extractor takes that memory from the pool instead. The `api_benchmark pooled-request` mode times the
-four request forms on a pooled network next to the same forms on a default one, rotating the cases
+five request forms on a pooled network next to the same forms on a default one, rotating the cases
 and reporting medians; 65536 elements, one core, three runs per host:
 
 | Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
 |---|---:|---:|---:|---:|
-| `guard` (borrowed output) | 24217 to 25640 ns | 16711 to 16898 ns | 97436 ns | 30081 ns |
-| `extract_owned` (owned output) | 220482 to 225225 ns | 22813 to 22886 ns | 194811 ns | 84442 ns |
-| `infer_into` (owned input, reused buffer) | 29723 to 31880 ns | 22660 to 23586 ns | 97429 ns | 37113 ns |
-| `infer_borrowed_into` (borrowed input and buffer) | 21999 to 23087 ns | 16407 to 17330 ns | 39843 ns | 18102 ns |
+| `guard` (borrowed output) | 24232 to 29170 ns | 17352 to 17866 ns | 46250 ns | 22474 ns |
+| `extract_mat` (zero-copy owned output) | 23871 to 31283 ns | 23610 to 25118 ns | 47356 ns | 44354 ns |
+| `extract_owned` (owned value vector) | 29392 to 34542 ns | 24091 to 24962 ns | 98998 ns | 47087 ns |
+| `infer_into` (owned input, reused buffer) | 30697 to 31413 ns | 23589 to 23976 ns | 55282 ns | 29154 ns |
+| `infer_borrowed_into` (borrowed input and buffer) | 22916 to 23433 ns | 16793 to 17920 ns | 29552 ns | 18502 ns |
 
-The guest values are the range of three runs and the Windows values the minimum of three runs on a
-host that other work was using, which moved its absolute numbers by up to twice between runs while
-the ratio held. The owned form gains most because it was the form that allocated: about ten times on
-the glibc guest and about two times on the Windows host, whose heap serves the same pattern more
-cheaply. The borrowed-buffer form gains a quarter on the guest and about half on the Windows host
-even though it allocates nothing on the caller side, because the pooled intermediates remove the
-engine's own per-request allocation. The pools keep the blocks they served for as long as the network
-lives, so the retained set grows by the working set of one request and drops with the network.
+The guest values are the range of three runs and the Windows values the minimum of three runs.
+Rotating the cases warms the heap for every form, so the absolute figures here are lower than the
+single-mode medians above and describe a mixed workload; the ratios within a row are what the mode
+measures. The owned vector gains most because its buffer is the one that allocates. The borrowed
+forms gain too even though they allocate nothing on the caller side, because the pooled intermediates
+remove the engine's own per-request allocation. `extract_mat` gains nothing, and that is the point:
+a pooled network skips the native detach clone, so the wrapper copies instead of keeping the buffer,
+which makes pooling and zero-copy ownership alternatives rather than additions. The pools keep the
+blocks they served for as long as the network lives, so the retained set grows by the working set of
+one request and drops with the network.
 
 `heap::retain_pages` addresses the other half: the pages of a buffer the caller allocates. A pooled
 network does not remove that buffer, and a network without pools still allocates its tensors, so the
@@ -216,30 +265,34 @@ asserts both halves of that claim on whichever host runs the suite.
 
 A Linux run of the same request-path modes on a WSL2 Debian guest (8 vCPU AMD Ryzen 7 5800H, glibc
 2.41, gcc 14.2, `libncnn.so` built from `vendor/ncnn-20261020`, one thread, pinned to one core,
-minimum of three runs) reproduces the Windows ranking and shows the mechanism:
+median of nine runs) reproduces the Windows ranking and shows the mechanism:
 
 | Mode | ns per request | Rust allocations per request |
 |---|---:|---:|
-| `native-request` | 23371 | none |
-| `resolved-reused` | 15934 | 0 |
-| `borrowed-reused` | 24349 | 5 x 123 B |
-| `owned-guard` | 10053 | 2 small |
-| `owned-view` | 208833 | 1 x 262 KB |
-| `copy` | 473106 | 4 x 262 KB |
+| `native-request` | 23804 | none |
+| `native-buffer` | 18200 | none |
+| `native-owned` | 10422 | none |
+| `owned-guard` | 10930 | 2 small |
+| `guard-into` | 10784 | 2 small |
+| `owned-mat` | 11124 | 2 small |
+| `resolved-reused` | 18040 | 0 |
+| `borrowed-reused` | 23908 | 5 x 123 B |
+| `owned-view` | 226298 | 1 x 262 KB |
+| `copy` | 497350 | 2 x 262 KB |
 
-The modes that borrow or reuse an output match or beat the C API; the modes that return
-independent storage pay for page faults rather than for copies. A standalone probe of the
-allocator shows the whole effect: allocating and freeing one 256 KB buffer per iteration costs
-4.8 us and faults nothing, because the freed chunk is reused immediately, while holding two
+The modes that borrow or reuse an output match the C API within a few percent; the mode that
+returns an owned value vector pays for page faults rather than for copies. A standalone probe of
+the allocator shows the whole effect: allocating and freeing one 256 KB buffer per iteration
+costs 4.8 us and faults nothing, because the freed chunk is reused immediately, while holding two
 distinct 256 KB buffers alive per iteration costs 203 us and faults 96 times per iteration,
 because glibc serves each buffer from a fresh mapping and returns it to the kernel on free. The
 fault count is the cost: 28803 minor faults over 300 iterations, about 2.1 us per fault on this
 guest. Running the same two-buffer probe with `MALLOC_MMAP_THRESHOLD_=1073741824` and
 `MALLOC_TRIM_THRESHOLD_=-1` removes both the mapping round trip and the faults and brings it to
 9.4 us with 4 faults in total. The request path follows the same rule: `owned-view` allocates the
-input tensor and the output vector per request and lands at 209 us, `copy` allocates four buffers
-and lands at 473 us, and setting the same two variables in the environment drops `owned-view` to
-17.6 us.
+output vector per request and lands at 226 us, `copy` allocates two data buffers plus the native
+clone and lands at 497 us, and setting the same two variables in the environment drops them to
+16.2 us and 31.0 us.
 
 Two conclusions follow. Reusing storage is the portable fix, and `infer_into`, `infer_borrowed_into`
 and `extract` already do that at native parity. Where an application cannot reuse, the heap decides:

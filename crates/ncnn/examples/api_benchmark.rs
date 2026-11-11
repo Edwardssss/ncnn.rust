@@ -43,7 +43,10 @@ fn request(
         ex.input(input_id, input)?;
     } else if mode == "index" {
         ex.input(input_id.index(), input)?;
-    } else if matches!(mode, "owned-view" | "owned-guard" | "guard-detach" | "name") {
+    } else if matches!(
+        mode,
+        "owned-view" | "owned-mat" | "owned-guard" | "guard-detach" | "guard-into" | "name"
+    ) {
         ex.input("input", input)?;
     } else {
         ex.input("input", input.deep_clone()?)?;
@@ -55,6 +58,16 @@ fn request(
     }
     if mode == "owned-guard" {
         let output = ex.extract("output")?;
+        let values = output.as_f32_slice()?;
+        return Ok(black_box(values[0] + values[values.len() - 1]));
+    }
+    if mode == "guard-into" {
+        let output = ex.extract("output")?.into_mat()?;
+        let values = output.as_f32_slice()?;
+        return Ok(black_box(values[0] + values[values.len() - 1]));
+    }
+    if mode == "owned-mat" {
+        let output = ex.extract_mat("output")?;
         let values = output.as_f32_slice()?;
         return Ok(black_box(values[0] + values[values.len() - 1]));
     }
@@ -83,14 +96,16 @@ fn request(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    let mode = args.get(1).map(String::as_str).unwrap_or("owned-view");
+    let mode = args.get(1).map(String::as_str).unwrap_or("owned-mat");
     if !matches!(
         mode,
         "copy"
             | "view"
             | "owned-view"
+            | "owned-mat"
             | "owned-guard"
             | "guard-detach"
+            | "guard-into"
             | "name"
             | "index"
             | "resolved"
@@ -100,9 +115,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "gpu-resident"
             | "preprocess"
             | "native-request"
+            | "native-buffer"
+            | "native-owned"
             | "pooled-request"
     ) {
-        return Err("Choose copy, view, owned-view, owned-guard, name, index, resolved, resolved-reused, guard-detach, gpu-transfer, gpu-resident, preprocess, native-request, or pooled-request".into());
+        return Err("Choose copy, view, owned-view, owned-mat, owned-guard, guard-detach, guard-into, name, index, resolved, resolved-reused, borrowed-reused, gpu-transfer, gpu-resident, preprocess, native-request, native-buffer, native-owned, or pooled-request".into());
     }
     let iterations: usize = args
         .get(2)
@@ -126,8 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "preprocess" {
         return preprocessing(iterations, elements);
     }
-    if mode == "native-request" {
-        return native_request(iterations, elements);
+    if mode.starts_with("native-") {
+        return native_request(mode, iterations, elements);
     }
     if mode == "pooled-request" {
         return pooled_request(iterations, elements);
@@ -191,6 +208,7 @@ fn pooled_request(iterations: usize, elements: usize) -> Result<(), Box<dyn std:
     let buffer = RefCell::new(Vec::new());
     let forms = [
         "guard",
+        "extract-mat",
         "extract-owned",
         "infer-into",
         "infer-borrowed-into",
@@ -237,6 +255,12 @@ fn request_form(
         let output = extractor.extract("output")?;
         return Ok(checksum(output.as_f32_slice()?));
     }
+    if form == "extract-mat" {
+        let mut extractor = net.extractor()?;
+        extractor.input("input", Mat::from_f32(values, &[values.len()])?)?;
+        let output = extractor.extract_mat("output")?;
+        return Ok(checksum(output.as_f32_slice()?));
+    }
     if form == "extract-owned" {
         let mut extractor = net.extractor()?;
         extractor.input("input", Mat::from_f32(values, &[values.len()])?)?;
@@ -260,22 +284,54 @@ fn request_form(
     Ok(checksum(&target[ranges[0].values.clone()]))
 }
 
-/// Runs the native C request path over the same graph, so the wrapper modes have a reference: the
-/// extractor is created per request, the input is borrowed, and the output is read into a reusable
-/// buffer. Exporting the network handle disables guarded output, which is why this mode owns its net.
-fn native_request(iterations: usize, elements: usize) -> Result<(), Box<dyn std::error::Error>> {
+/// Runs the native C request path over the same graph, so the wrapper modes have a reference.
+///
+/// Three references cover the three request shapes: a borrowed input read into a reusable buffer,
+/// an owned input read into a reusable buffer, and an owned input read in place through the pointer
+/// the handle carries. Exporting the network handle disables guarded output, which is why these
+/// modes own their net.
+///
+/// A borrowed input cannot run light mode: the native forward path reads the storage refcount that
+/// an external tensor does not carry ([Tencent/ncnn#1543]), so `native-request` keeps the option off
+/// exactly like the wrapper's borrowed modes. The owned references run light mode, the option the
+/// wrapper's owned rows use.
+///
+/// [Tencent/ncnn#1543]: https://github.com/Tencent/ncnn/issues/1543
+fn native_request(
+    mode: &str,
+    iterations: usize,
+    elements: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     use ncnn_rust::sys;
-    let net = Net::builder()?.threads(1)?.load_bytes(
+    let owned_input = mode != "native-request";
+    let in_place = mode == "native-owned";
+    let builder = Net::builder()?.threads(1)?;
+    let builder = if owned_input {
+        builder.option(CpuOption::LightMode, 1)?
+    } else {
+        builder
+    };
+    let net = builder.load_bytes(
         "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
         &[],
     )?;
     let values = vec![1f32; elements];
     let mut buffer = vec![0f32; elements];
     let mut request = || -> ncnn::Result<f32> {
-        let input = unsafe { Mat::from_external(&values, &[elements])? };
-        unsafe {
+        let checksum = unsafe {
             let ex = sys::ncnn_extractor_create(net.as_raw());
-            if sys::ncnn_extractor_input(ex, c"input".as_ptr(), input.as_raw()) != 0 {
+            // Both handles drop before the request runs. Native input holds its own reference, and
+            // light mode reuses a released bottom blob, so a handle that stays alive costs one extra
+            // tensor allocation per request. Consuming the tensor in `input` performs this release
+            // for the wrapper.
+            let code = if owned_input {
+                let owned = Mat::from_f32(&values, &[elements])?;
+                sys::ncnn_extractor_input(ex, c"input".as_ptr(), owned.as_raw())
+            } else {
+                let external = Mat::from_external(&values, &[elements])?;
+                sys::ncnn_extractor_input(ex, c"input".as_ptr(), external.as_raw())
+            };
+            if code != 0 {
                 sys::ncnn_extractor_destroy(ex);
                 return Err(ncnn::Error::NativeAt("native input", -1));
             }
@@ -285,14 +341,22 @@ fn native_request(iterations: usize, elements: usize) -> Result<(), Box<dyn std:
                 sys::ncnn_extractor_destroy(ex);
                 return Err(ncnn::Error::NativeAt("native extract", code));
             }
-            let code = sys::ncnn_rs_mat_read_f32(output, buffer.as_mut_ptr(), elements);
+            let code = if in_place {
+                let data = sys::ncnn_mat_get_data(output) as *const f32;
+                let sum = data.read() + data.add(elements - 1).read();
+                buffer[0] = sum;
+                0
+            } else {
+                sys::ncnn_rs_mat_read_f32(output, buffer.as_mut_ptr(), elements)
+            };
             sys::ncnn_mat_destroy(output);
             sys::ncnn_extractor_destroy(ex);
             if code != 0 {
                 return Err(ncnn::Error::NativeAt("native read", code));
             }
-        }
-        Ok(black_box(buffer[0] + buffer[elements - 1]))
+            buffer[0] + buffer[elements - 1]
+        };
+        Ok(black_box(checksum))
     };
     for _ in 0..20 {
         assert_eq!(request()?, 2.);
@@ -303,9 +367,8 @@ fn native_request(iterations: usize, elements: usize) -> Result<(), Box<dyn std:
         checksum += request()?;
     }
     let elapsed = start.elapsed();
-    assert_eq!(checksum, iterations as f32 * 2.);
     println!(
-        "mode=native-request, elements={elements}, iterations={iterations}, ns_per_request={}, checksum={checksum}, scope=C_api_reference",
+        "mode={mode}, elements={elements}, iterations={iterations}, ns_per_request={}, checksum={checksum}, scope=C_api_reference",
         elapsed.as_nanos() / iterations as u128
     );
     Ok(())

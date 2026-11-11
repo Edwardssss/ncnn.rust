@@ -5,6 +5,28 @@ All notable changes to this project are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release pins one ncnn release, so a
 library upgrade is a minor change of this crate.
 
+## Unreleased
+
+### Added
+
+- `Extractor::extract_mat` returns an output as an independently owned `Mat` without copying it:
+  the native extractor already detaches the tensor from its own blob pool, and this form takes that
+  buffer instead of duplicating it. `OutputGuard::into_mat` is the same form through a scoped guard,
+  and `extract_stored_owned` uses it for stored storage.
+- `api_benchmark` gained the `owned-mat`, `guard-into`, `native-buffer` and `native-owned` modes.
+
+### Changed
+
+- `extract_stored_owned` and `OutputGuard::into_mat` copy only when the storage cannot be owned: a
+  network built with `NetBuilder::reuse_blob_memory` returns tensors inside its pools, and an
+  extractor that submitted a borrowed input returns caller storage. `OutputGuard::detach` keeps its
+  copying behaviour.
+- The native request reference in `api_benchmark` now runs the options each wrapper row uses
+  (`native-request` borrows its input and keeps light mode off, the owned variants enable it) and
+  releases its input handle before the request. The request-path figures in the performance page were
+  measured again: the wrapper matches the C API on every form that borrows or reuses its output, and
+  the forms that return copied storage cost one or two 256 KB buffers per request.
+
 ## 0.3.0 - 2026-11-11
 
 ### Added

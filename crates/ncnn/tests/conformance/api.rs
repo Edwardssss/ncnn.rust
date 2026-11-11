@@ -670,6 +670,75 @@ fn borders_run_on_the_native_padding_and_crop_kernels() {
 }
 
 #[test]
+fn owned_extraction_keeps_the_detached_buffer() {
+    let net = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(
+            "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+            &[],
+        )
+        .unwrap();
+    let mut extractor = net.extractor().unwrap();
+    extractor
+        .input("input", Mat::from_f32(&[1.0f32, -2.0], &[2]).unwrap())
+        .unwrap();
+    let first = extractor.extract_mat("output").unwrap();
+    assert_eq!(first.to_f32().unwrap(), [1., 0.]);
+
+    // A later request reuses the extractor's storage; the owned tensor must not follow it.
+    extractor
+        .input("input", Mat::from_f32(&[-3.0f32, 4.0], &[2]).unwrap())
+        .unwrap();
+    let second = extractor.extract_mat("output").unwrap();
+    assert_eq!(second.to_f32().unwrap(), [0., 4.]);
+    assert_eq!(
+        first.to_f32().unwrap(),
+        [1., 0.],
+        "the first tensor is independent"
+    );
+
+    // The guard converts into the same owned form and releases the network.
+    extractor
+        .input("input", Mat::from_f32(&[5.0f32, -6.0], &[2]).unwrap())
+        .unwrap();
+    let third = extractor.extract("output").unwrap().into_mat().unwrap();
+    assert_eq!(third.to_f32().unwrap(), [5., 0.]);
+    extractor
+        .input("input", Mat::from_f32(&[7.0f32, 8.0], &[2]).unwrap())
+        .unwrap();
+    assert_eq!(
+        extractor.extract_mat("output").unwrap().to_f32().unwrap(),
+        [7., 8.]
+    );
+
+    // A pooled network hands out storage its pools own, so the owned form copies and stays correct
+    // across a later request.
+    let pooled = Net::builder()
+        .unwrap()
+        .reuse_blob_memory()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(
+            "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+            &[],
+        )
+        .unwrap();
+    let mut extractor = pooled.extractor().unwrap();
+    extractor
+        .input("input", Mat::from_f32(&[1.0f32, -2.0], &[2]).unwrap())
+        .unwrap();
+    let kept = extractor.extract_mat("output").unwrap();
+    extractor
+        .input("input", Mat::from_f32(&[-3.0f32, 4.0], &[2]).unwrap())
+        .unwrap();
+    extractor.extract_mat("output").unwrap();
+    assert_eq!(kept.to_f32().unwrap(), [1., 0.]);
+}
+
+#[test]
 fn borrowed_inputs_run_without_copying() {
     let net = Net::builder()
         .unwrap()

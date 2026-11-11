@@ -29,6 +29,7 @@ pub struct Extractor<'net> {
     pub(crate) low_copy: Cell<bool>,
     pub(crate) extracted: Cell<bool>,
     pub(crate) continuation: Cell<bool>,
+    pub(crate) borrowed_input: Cell<bool>,
     pub(crate) light_mode: Option<bool>,
     pub(crate) net_light_mode: bool,
     pub(crate) blob_allocator: Option<sys::ncnn_allocator_t>,
@@ -209,6 +210,7 @@ impl Extractor<'_> {
             return Err(Error::Native(-100));
         }
         self.extracted.set(false);
+        self.borrowed_input.set(false);
         let stale = std::mem::replace(&mut self.raw, raw);
         unsafe { sys::ncnn_extractor_destroy(stale) };
         unsafe {
@@ -300,6 +302,25 @@ impl Extractor<'_> {
         unsafe { Mat::owned(raw, false) }
     }
 
+    /// Reports whether an extracted tensor can keep the storage ncnn handed out.
+    ///
+    /// The native extractor detaches an output from its own pool allocator before it returns the
+    /// handle, so the buffer belongs to the tensor and survives the extractor and the network. Two
+    /// configurations return storage that this crate cannot own: a network built with
+    /// [`NetBuilder::reuse_blob_memory`](crate::NetBuilder::reuse_blob_memory) hands back a tensor
+    /// inside the network's pools, and a borrowed input hands back storage the caller manages.
+    fn keeps_extracted_storage(&self) -> bool {
+        !self._net.reuses_blob_memory() && !self.borrowed_input.get()
+    }
+    /// Returns the storage ncnn handed out, or a copy when this extractor cannot keep it.
+    fn own_extracted(&self, mat: Mat) -> Result<Mat> {
+        if self.keeps_extracted_storage() {
+            Ok(mat)
+        } else {
+            mat.deep_clone()
+        }
+    }
+
     /// Consumes an owned input, copying raw-adopted storage.
     ///
     /// The tensor's storage is transferred when the crate created or independently cloned it, and
@@ -388,7 +409,10 @@ impl Extractor<'_> {
                     sys::ncnn_extractor_input_index(self.raw, *index, mat.raw)
                 }
             },
-        )
+        )?;
+        // An owned extraction of this storage would outlive the borrow the caller promised.
+        self.borrowed_input.set(true);
+        Ok(())
     }
     /// Borrows eligible CPU output through a scoped guard.
     ///
@@ -401,9 +425,11 @@ impl Extractor<'_> {
         self.ensure_borrowable(false)?;
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, false)?;
+        let keeps_storage = self.keeps_extracted_storage();
         self._net.guard.output_borrowed.set(true);
         Ok(OutputGuard {
             mat,
+            keeps_storage,
             network_borrowed: &self._net.guard.output_borrowed,
             _extractor: PhantomData,
         })
@@ -437,9 +463,11 @@ impl Extractor<'_> {
         self.ensure_borrowable(true)?;
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, true)?;
+        let keeps_storage = self.keeps_extracted_storage();
         self._net.guard.output_borrowed.set(true);
         Ok(OutputGuard {
             mat,
+            keeps_storage,
             network_borrowed: &self._net.guard.output_borrowed,
             _extractor: PhantomData,
         })
@@ -452,7 +480,37 @@ impl Extractor<'_> {
     pub fn extract_stored_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<Mat> {
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, true)?;
-        mat.deep_clone()
+        self.own_extracted(mat)
+    }
+    /// Returns one output as an independently owned tensor without copying it.
+    ///
+    /// The native extractor detaches the output from its own pool allocator before it returns the
+    /// handle, so the buffer already belongs to the tensor: this form takes that buffer instead of
+    /// duplicating it. The tensor stays valid after the extractor and the network are dropped, and
+    /// after later requests run.
+    ///
+    /// A network built with
+    /// [`NetBuilder::reuse_blob_memory`](crate::NetBuilder::reuse_blob_memory) returns tensors
+    /// inside its pools, which have to outlive them, and an extractor that submitted a borrowed
+    /// input returns caller storage; both cases copy instead, so the tensor is independent either
+    /// way. Use [`extract`](Self::extract) while the output is consumed in place, and
+    /// [`extract_owned`](Self::extract_owned) for FP32 values in a caller-owned vector.
+    ///
+    /// ```
+    /// let net = ncnn_rust::Net::builder()?.threads(1)?.load_bytes(
+    ///     "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
+    ///     &[],
+    /// )?;
+    /// let mut extractor = net.extractor()?;
+    /// extractor.input("input", ncnn_rust::Mat::from_f32(&[-1.0, 2.0], &[2])?)?;
+    /// let output = extractor.extract_mat("output")?;
+    /// assert_eq!(output.to_f32()?, [0.0, 2.0]);
+    /// # Ok::<(), ncnn_rust::Error>(())
+    /// ```
+    pub fn extract_mat<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<Mat> {
+        let target = self.resolve(endpoint.into(), true)?;
+        let mat = self.extract_native(&target, false)?;
+        self.own_extracted(mat)
     }
     /// Returns validated values with independent owned storage.
     ///
@@ -462,8 +520,9 @@ impl Extractor<'_> {
     /// [`extract_stored_owned`](Self::extract_stored_owned).
     ///
     /// Each call allocates the value vector and frees it again. [`extract_into`](Self::extract_into)
-    /// appends to a caller buffer instead and allocates no data buffer, and
-    /// [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
+    /// appends to a caller buffer instead and allocates no data buffer,
+    /// [`extract_mat`](Self::extract_mat) returns the tensor the extractor already detached without
+    /// copying it, and [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
     pub fn extract_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<FinalOutput> {
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, false)?;
@@ -575,6 +634,7 @@ impl Extractor<'_> {
 /// ```
 pub struct OutputGuard<'extractor> {
     mat: Mat,
+    keeps_storage: bool,
     network_borrowed: &'extractor Cell<bool>,
     _extractor: PhantomData<&'extractor mut ()>,
 }
@@ -608,8 +668,30 @@ impl OutputGuard<'_> {
     ///
     /// The copy keeps the element width, so a quantized output stays readable through
     /// [`Mat::to_i8`](crate::Mat::to_i8) after the next request has run.
+    /// [`into_mat`](Self::into_mat) consumes the guard instead and keeps the buffer the extractor
+    /// already detached, which costs no copy on a network that allocates intermediate tensors
+    /// through the process heap.
     pub fn detach(&self) -> Result<Mat> {
         self.mat.deep_clone()
+    }
+    /// Consumes the guard and keeps the extracted tensor without copying it.
+    ///
+    /// The guard hands out the buffer the native extractor detached when this extractor can keep
+    /// it, and copies in the two cases where it cannot: a network built with
+    /// [`NetBuilder::reuse_blob_memory`](crate::NetBuilder::reuse_blob_memory) returns storage
+    /// inside its pools, and an extractor that submitted a borrowed input returns caller storage.
+    /// Either way the tensor is independent of the guard, extractor and network once this returns,
+    /// and the network stops being reserved.
+    pub fn into_mat(self) -> Result<Mat> {
+        if !self.keeps_storage {
+            return self.mat.deep_clone();
+        }
+        let guard = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `guard` is never dropped, so the tensor is read exactly once, and the borrow flag
+        // is cleared here instead of in `Drop`.
+        let mat = unsafe { std::ptr::read(&guard.mat) };
+        guard.network_borrowed.set(false);
+        Ok(mat)
     }
     /// Copies logical FP32 elements into a new vector.
     ///

@@ -174,4 +174,6 @@ binding from the engine. Median milliseconds per request, one thread:
 The `ncnn-rust` column resolves endpoints once and reuses a caller vector, which allocates nothing
 after warm-up. Single-layer graphs stay at native timing: ReLU and AbsVal both measure 0.002 ms on
 CPU. Returning an owned vector per request instead costs one output copy, which is where the
-NanoDet Vulkan gap of 18% comes from.
+NanoDet Vulkan gap of 18% comes from. `extract_mat` and `OutputGuard::into_mat` return an owned
+tensor without that copy: the native extractor already detaches its output from the network's blob
+pool, and these forms keep that buffer.

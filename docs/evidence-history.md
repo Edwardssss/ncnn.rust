@@ -288,6 +288,31 @@ case with a three-dimensional `[4, 4, 1]` operand on the same runner returned `N
 sequence row, index 4 to 7 of sixteen, while the x86-64 run stayed finite. The case therefore uses
 the two-dimensional form, and no target carries an exemption any more.
 
+## Owned extraction without a copy
+
+The native extractor detaches every output from the network's local blob pool before it returns the
+handle (`src/net.cpp`, branch at the end of `Extractor::extract`), so the buffer ncnn hands out
+already belongs to the tensor. A probe that kept that handle across a second request and read it
+afterwards still returned the first request's value, which confirms the buffer survives the
+extractor, the network and later requests.
+
+`extract_mat`, `extract_stored_owned` and `OutputGuard::into_mat` therefore take that buffer instead
+of duplicating it. Two configurations cannot hand it out: a network built with `reuse_blob_memory`
+installs its own blob allocator, which skips the native detach clone, and a probe that retained such
+a tensor across two requests ended with ncnn's pool allocator aborting on destruction while two
+blocks were still referenced; an extractor that submitted a borrowed input returns caller storage.
+Both cases copy inside the wrapper.
+
+The same probe campaign found the native counterpart of the copy cost. Submitting an owned tensor
+through the C API and releasing the caller's handle before the request costs 10.2 to 11.2 us on the
+WSL2 guest, while keeping the handle alive until after extraction costs 219 to 251 us with the same
+graph, because the input blob never reaches a refcount of zero and the layer output cannot reuse its
+buffer. `Extractor::input` consumes the tensor and therefore cannot reach that state.
+
+Raising `MALLOC_MMAP_THRESHOLD_` and `MALLOC_TRIM_THRESHOLD_` isolates the remaining difference:
+with the thresholds raised, the value-vector form drops from 222878 ns to 16187 ns and the
+double-clone form from 489899 ns to 31019 ns, while the forms that allocate no data buffer stay at
+10.4 us. At 1024 elements the four modes collapse to 1128, 1134, 1265 and 1565 ns.
 ## SDK patches in the measured builds
 
 Every measured build applied the two patches in `tools/patches/`, which
