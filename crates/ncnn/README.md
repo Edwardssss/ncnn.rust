@@ -49,9 +49,10 @@ fn main() -> ncnn_rust::Result<()> {
 views borrow their tensor and expose logical initialized data: `Mat::channel`, `channel_range`,
 `depth`, `depth_range`, `column_range`, `row_range`, `batch` and `batch_range` return a `MatView`
 that aliases the source storage, so the slice readers borrow it and the copying readers, like
-`to_f32`, copy out of it; submitting a view as an input copies as well. `input` transfers
-crate-owned storage; raw-adopted inputs are copied so external storage dependencies stay with the
-caller.
+`to_f32`, copy out of it; `Extractor::input` copies a view as well. `Net::infer_view_into` reads the
+region where it lives and appends the outputs to a caller buffer, which is the zero-copy form for a
+model that takes a crop, a channel or one batch item. `input` transfers crate-owned storage;
+raw-adopted inputs are copied so external storage dependencies stay with the caller.
 
 Batched storage is built with `Mat::from_f32_batch`, and `TensorInfo::n` reports the batch count.
 `Mat::into_normalized` and `Mat::into_reshape` consume a tensor the caller no longer needs, which lets
@@ -129,9 +130,10 @@ first. `Extractor::clear` performs that restart explicitly, and `Extractor::cont
 the cached state for the next input, which is what token-by-token decoding needs. The per-extractor
 settings `set_light_mode`, `set_blob_allocator`, `set_workspace_allocator`, `set_kvcache_allocator`
 and `set_kvcache_max_seqlen_hint` override the network options for one request path and survive a
-restart. Light mode releases each intermediate after its consumer, so a graph whose blob feeds two
-layers, such as a residual connection, needs it off. A network and its extractor stay on the thread
-that created them, which makes one pair per worker the scaling unit;
+restart. Light mode releases each intermediate after its consumer, so `set_light_mode(true)` returns
+`Error::Invalid` while `Net::shared_blobs` lists a blob that feeds two layers, such as a residual
+connection; an explicit `Split` layer keeps such a graph compatible. A network and its extractor stay
+on the thread that created them, which makes one pair per worker the scaling unit;
 `crates/ncnn/examples/threads.rs` measures that against a single network over every core.
 
 Quantized and half-precision outputs keep the width the producing layer wrote. `Net::infer_stored`

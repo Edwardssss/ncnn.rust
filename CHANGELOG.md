@@ -77,6 +77,14 @@ library upgrade is a minor change of this crate.
 - `Net::layer_handle` returns a `GraphLayer`, the layer the loaded graph holds at an index, for the
   native layer calls the raw module exposes, next to the `Net::layers` description of the same layer.
   The guard owns the C handle and releases it on drop, while the layer stays with the network.
+- `Net::shared_blobs` lists the blobs more than one layer reads. `Extractor::set_light_mode` and
+  `Net::extractor` return `Error::Invalid` while that list is not empty, because light mode releases
+  a bottom blob after its first consumer and the graph would otherwise return the values of that
+  consumer; an explicit `Split` layer keeps a graph compatible.
+- `MatView::as_mat` exposes the tensor a view aliases, and `Net::infer_view_into` runs one request
+  over sub views and appends the outputs to a caller buffer. It is the zero-copy form for a model
+  that takes a crop, a channel or one batch item, and it replaces the copy that
+  `Extractor::input` performs on a view.
 - `crates/ncnn/examples/threads.rs` runs one network per worker thread and reports the aggregate
   throughput next to a single network that uses every core.
 - The nightly fuzz workflow also fuzzes the pixel view and the typed tensor paths, so the buffer

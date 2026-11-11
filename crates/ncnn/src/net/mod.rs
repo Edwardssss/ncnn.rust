@@ -15,7 +15,7 @@ use crate::{
     sys, Error, Mat, Options, Result,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     ffi::{CStr, CString},
     marker::PhantomData,
     path::Path,
@@ -30,6 +30,21 @@ fn utf8_path(path: &Path) -> Result<CString> {
         .to_str()
         .ok_or_else(|| Error::invalid("The native loader needs a UTF-8 path"))?;
     Ok(CString::new(text)?)
+}
+
+/// Refuses light mode for a graph that reads one blob from more than one layer.
+///
+/// Light mode releases a bottom blob after its first consumer, and the producing layer cannot refill
+/// it, so such a graph returns wrong values instead of failing. The check runs when a request starts,
+/// which is the first point that knows both the graph and the option.
+pub(crate) fn reject_light_mode(net: &Net) -> Result<()> {
+    let shared = net.shared_blobs()?;
+    let Some(blob) = shared.first() else {
+        return Ok(());
+    };
+    Err(Error::invalid(format!(
+        "Light mode cannot run this graph: blob `{blob}` feeds more than one layer, and light mode releases a bottom blob after its first consumer; keep light mode off or add an explicit Split layer"
+    )))
 }
 
 /// Low-copy eligibility shared by a network and the extractors created from it.
@@ -73,6 +88,11 @@ pub struct Net {
     pub(crate) guard: GuardState,
     #[cfg(feature = "vulkan")]
     device: Option<crate::gpu::Device>,
+    /// Blobs more than one layer reads, computed once per load.
+    ///
+    /// Light mode releases a bottom blob after its first consumer, so a graph that reads the same
+    /// blob twice cannot run that way. The list is filled on first use and dropped by `clear`.
+    shared_blobs: RefCell<Option<Vec<String>>>,
     /// Pools the network installed through [`NetBuilder::reuse_blob_memory`].
     ///
     /// The native option block stores the allocator handles without owning them, and the native
@@ -394,6 +414,7 @@ impl Net {
             guard: GuardState::new(),
             #[cfg(feature = "vulkan")]
             device: None,
+            shared_blobs: RefCell::new(None),
             pools: None,
             _thread: PhantomData,
         })
@@ -584,6 +605,7 @@ impl Net {
         }
         self.loaded = false;
         self.ready = false;
+        *self.shared_blobs.borrow_mut() = None;
     }
     /// Resolves an exposed graph input or output without retaining a CString.
     ///
@@ -716,6 +738,43 @@ impl Net {
         }
         Ok(ranges)
     }
+    /// Runs one request over tensor sub views and writes the outputs into a caller vector.
+    ///
+    /// A [`MatView`](crate::MatView) aliases part of a tensor and keeps no storage of its own, so
+    /// [`Extractor::input`](crate::Extractor::input) copies one. This form reads the region where it
+    /// already lives, which is the zero-copy path for a model that takes a crop, a channel or one
+    /// batch item as its input.
+    ///
+    /// The inputs and the extractor are created and dropped inside the call, so the borrow of the
+    /// source tensors covers every native read; the returned ranges identify each output the same
+    /// way [`infer_into`](Self::infer_into) does. Light mode rejects the call, because the native
+    /// forward path reads a storage refcount that a sub view does not carry, and a failed call
+    /// leaves `buffer` as it was.
+    pub fn infer_view_into(
+        &self,
+        inputs: &[(&str, &crate::MatView<'_>)],
+        outputs: &[&str],
+        buffer: &mut Vec<f32>,
+    ) -> Result<Vec<OutputRange>> {
+        let mut extractor = self.extractor()?;
+        for (name, view) in inputs {
+            // SAFETY: the views borrow their sources for the whole call, and the extractor is
+            // dropped before this function returns, so every native read stays inside that borrow.
+            unsafe { extractor.input_borrowed(*name, view.as_mat())? };
+        }
+        buffer.clear();
+        let mut ranges = Vec::with_capacity(outputs.len());
+        for name in outputs {
+            let start = buffer.len();
+            let info = extractor.extract_append(*name, buffer)?;
+            ranges.push(OutputRange {
+                name: (*name).to_owned(),
+                info,
+                values: start..buffer.len(),
+            });
+        }
+        Ok(ranges)
+    }
     /// Loads text parameters through a data reader.
     ///
     /// The reader lets an application load from an archive or an embedded asset without arranging a
@@ -827,7 +886,8 @@ impl Net {
     /// requests without returning a cached answer. A changed input shape still needs a new
     /// extractor when the graph was loaded for one shape. The call needs loaded weights, and a live
     /// scoped output reserves the network, so create the next extractor after dropping the previous
-    /// guard.
+    /// guard. A network whose options enable light mode is refused while the graph reads one blob
+    /// from two layers, see [`shared_blobs`](Self::shared_blobs).
     pub fn extractor(&self) -> Result<Extractor<'_>> {
         if self.guard.output_borrowed.get() {
             return Err(Error::invalid("A scoped output reserves this network"));
@@ -839,6 +899,9 @@ impl Net {
         }
         // Read the option before the handle exists, so a failed read leaves nothing to release.
         let net_light_mode = self.option(crate::CpuOption::LightMode)? != 0;
+        if net_light_mode {
+            reject_light_mode(self)?;
+        }
         let raw = unsafe { sys::ncnn_extractor_create(self.raw) };
         if raw.is_null() {
             return Err(Error::Native(-100));

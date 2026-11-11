@@ -135,13 +135,19 @@ impl Extractor<'_> {
     /// Enables or disables light mode for this extractor.
     ///
     /// Light mode releases each intermediate tensor after its consumer ran, which lowers what a
-    /// request holds in memory. Native ncnn releases the bottom blob after the first consumer and
-    /// refills it from its producer, so a graph whose blob feeds several layers (a residual
-    /// connection, or an input consumed twice) needs light mode off. The network option stays
-    /// unchanged; [`light_mode`](Self::light_mode) reports the value this handle uses.
-    pub fn set_light_mode(&mut self, enable: bool) {
+    /// request holds in memory. Native ncnn releases the bottom blob after its first consumer and
+    /// refills it from its producer, so a graph whose blob feeds several layers, such as a residual
+    /// connection or an input consumed twice, returns wrong values instead of failing:
+    /// [`Net::shared_blobs`](crate::Net::shared_blobs) lists those blobs, and enabling light mode
+    /// while the list is not empty returns [`Error::Invalid`]. The network option stays unchanged;
+    /// [`light_mode`](Self::light_mode) reports the value this handle uses.
+    pub fn set_light_mode(&mut self, enable: bool) -> Result<()> {
+        if enable {
+            super::reject_light_mode(self._net)?;
+        }
         unsafe { sys::ncnn_rs_extractor_lightmode(self.raw, i32::from(enable)) };
         self.light_mode = Some(enable);
+        Ok(())
     }
     /// Reports the light mode this extractor uses.
     ///

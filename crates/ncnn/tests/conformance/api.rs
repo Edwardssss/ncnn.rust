@@ -148,7 +148,7 @@ fn a_continuation_keeps_the_cached_state() {
 #[test]
 fn extractor_settings_override_the_network() {
     // A linear graph, because light mode releases each intermediate after its consumer and a graph
-    // whose input feeds two layers needs light mode off.
+    // whose input feeds two layers is refused.
     let net = Net::builder()
         .unwrap()
         .threads(1)
@@ -158,9 +158,10 @@ fn extractor_settings_override_the_network() {
             &[],
         )
         .unwrap();
+    assert!(net.shared_blobs().unwrap().is_empty());
     let mut extractor = net.extractor().unwrap();
     assert!(!extractor.light_mode());
-    extractor.set_light_mode(true);
+    extractor.set_light_mode(true).unwrap();
     assert!(extractor.light_mode());
     extractor.set_kvcache_max_seqlen_hint(32).unwrap();
 
@@ -195,6 +196,51 @@ fn extractor_settings_override_the_network() {
         );
     }
     blobs.clear();
+}
+
+#[test]
+fn light_mode_is_refused_when_a_blob_feeds_two_layers() {
+    // The reuse graph reads its input from ReLU and from the BinaryOp, which is what light mode
+    // cannot run: the blob is released after the first consumer.
+    let net = reuse_net();
+    assert_eq!(net.shared_blobs().unwrap(), ["in"]);
+    let mut extractor = net.extractor().unwrap();
+    let error = extractor.set_light_mode(true).unwrap_err();
+    assert!(
+        error.to_string().contains("feeds more than one layer"),
+        "{error}"
+    );
+    assert!(!extractor.light_mode());
+
+    // The network option answers the same way, so a graph loaded with light mode on fails when a
+    // request starts instead of returning the values of the first consumer.
+    let rejected = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .option(ncnn_rust::CpuOption::LightMode, 1)
+        .unwrap()
+        .load_bytes(REUSE_PARAM, &[])
+        .unwrap();
+    assert!(rejected.extractor().is_err());
+
+    // A Split layer gives each consumer its own blob, which keeps light mode usable.
+    let split = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes(
+            "7767517\n3 4\nInput in 0 1 in\nSplit split 1 2 in a b\nReLU relu 1 1 a out\n",
+            &[],
+        )
+        .unwrap();
+    assert!(split.shared_blobs().unwrap().is_empty());
+    let mut extractor = split.extractor().unwrap();
+    extractor.set_light_mode(true).unwrap();
+    extractor
+        .input("in", Mat::from_f32(&[-1f32; 3], &[3]).unwrap())
+        .unwrap();
+    assert_eq!(extractor.extract_owned("out").unwrap().values, [0., 0., 0.]);
 }
 
 #[test]
@@ -255,6 +301,45 @@ fn tensor_views_alias_the_source() {
         extractor.extract_owned("out").unwrap().values,
         [0., 2., 4., 6.]
     );
+}
+
+#[test]
+fn tensor_views_feed_a_request_without_copying() {
+    // A linear graph, because light mode has to stay off for a borrowed input and the reuse graph
+    // reads its input from two layers.
+    let net = Net::builder()
+        .unwrap()
+        .threads(1)
+        .unwrap()
+        .load_bytes("7767517\n2 2\nInput in 0 1 in\nReLU relu 1 1 in out\n", &[])
+        .unwrap();
+    let values: Vec<f32> = (0..8).map(|index| index as f32).collect();
+    let tensor = Mat::from_f32(&values, &[2, 2, 2]).unwrap();
+    let mut buffer = Vec::new();
+
+    // The region reaches the layer where it lives: the second channel reads back as itself, and the
+    // source is untouched afterwards.
+    let ranges = net
+        .infer_view_into(
+            &[("in", &tensor.channel(1).unwrap())],
+            &["out"],
+            &mut buffer,
+        )
+        .unwrap();
+    assert_eq!(buffer[ranges[0].values.clone()], [4., 5., 6., 7.]);
+    assert_eq!(tensor.to_f32().unwrap(), values);
+
+    // A negative region clamps at zero, so the view really is what the layer read.
+    let signed = Mat::from_f32(&[-1f32, 2., -3., 4.], &[2, 1, 2]).unwrap();
+    let ranges = net
+        .infer_view_into(
+            &[("in", &signed.channel(0).unwrap())],
+            &["out"],
+            &mut buffer,
+        )
+        .unwrap();
+    assert_eq!(buffer[ranges[0].values.clone()], [0., 2.]);
+    assert_eq!(signed.to_f32().unwrap(), [-1., 2., -3., 4.]);
 }
 
 #[test]

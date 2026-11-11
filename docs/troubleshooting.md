@@ -201,21 +201,28 @@ following input starts a new request again.
 
 ## A graph whose input feeds two layers returns wrong values in light mode
 
-**Symptom:** a residual or skip connection computes different values from the reference, while the
-same graph is correct with light mode off.
+**Symptom:** enabling light mode on a graph with a residual or skip connection fails with a message
+about a blob that feeds more than one layer.
 
 **Cause:** light mode releases a bottom blob after its first consumer ran and refills it from its
 producer, and the `Input` layer cannot refill a blob once its data was released. A blob that feeds
-two layers, or an input consumed twice, therefore reaches its second consumer empty.
+two layers, or an input consumed twice, therefore reaches its second consumer empty, which produced
+wrong values before this was checked.
 
-**Fix:** keep light mode off for such graphs:
+**Fix:** keep light mode off for such graphs, which is the default, or insert an explicit `Split`
+layer so each consumer reads its own blob:
 
 ```rust
+for name in net.shared_blobs()? {
+    println!("{name} feeds more than one layer");
+}
 let mut extractor = net.extractor()?;
-extractor.set_light_mode(false);
+extractor.set_light_mode(true)?;
 ```
 
-The per-extractor call leaves the network option unchanged, so a second extractor still starts from
-the option value the network was loaded with. `Extractor::light_mode` reports the value a handle
-uses, and `Extractor::input_borrowed` rejects a borrowed input while that value is on, because the
-native forward path reads the storage refcount an external tensor does not carry.
+`Extractor::set_light_mode` and `Net::extractor` return `Error::Invalid` while
+`Net::shared_blobs` lists a blob, so the request never reaches the native release. The
+per-extractor call leaves the network option unchanged, so a second extractor still starts from the
+option value the network was loaded with. `Extractor::light_mode` reports the value a handle uses,
+and `Extractor::input_borrowed` rejects a borrowed input while that value is on, because the native
+forward path reads the storage refcount an external tensor does not carry.

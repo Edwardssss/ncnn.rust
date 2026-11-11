@@ -1248,6 +1248,17 @@ impl MatView<'_> {
     pub fn info(&self) -> TensorInfo {
         self.mat.info()
     }
+    /// Borrows the aliased tensor.
+    ///
+    /// The tensor keeps no storage of its own, so it cannot be transferred into an extractor, and
+    /// submitting it through [`Extractor::input`](crate::Extractor::input) copies. The borrowed
+    /// form accepts it without a copy: [`Net::infer_view_into`](crate::Net::infer_view_into) bounds
+    /// the borrow to one request, and
+    /// [`Extractor::input_borrowed`](crate::Extractor::input_borrowed) carries the lifetime rules
+    /// of every other borrowed input, which requires light mode off.
+    pub fn as_mat(&self) -> &Mat {
+        &self.mat
+    }
     /// Reports whether the region holds no elements.
     pub fn is_empty(&self) -> bool {
         self.mat.is_empty()

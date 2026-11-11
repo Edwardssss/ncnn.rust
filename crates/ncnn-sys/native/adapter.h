@@ -74,6 +74,8 @@ extern "C"
     int ncnn_rs_net_blob_count(ncnn_net_t net);
     int ncnn_rs_net_blob_info(ncnn_net_t net, int index, const char** name, int* dims,
                               int* w, int* h, int* d, int* c, int* producer, int* consumer);
+    // Blob index a layer reads at `bottom`, or -1 when the layer has fewer inputs.
+    int ncnn_rs_net_layer_bottom(ncnn_net_t net, int index, int bottom);
     // Shapes a layer declares for one of its blobs: the recorded bottom or top shape of that side.
     int ncnn_rs_net_layer_shape(ncnn_net_t net, int index, int top, int blob_index,
                                 int* dims, int* w, int* h, int* d, int* c);

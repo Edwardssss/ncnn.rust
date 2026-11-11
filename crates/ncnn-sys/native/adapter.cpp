@@ -955,6 +955,23 @@ extern "C" int ncnn_rs_net_blob_info(ncnn_net_t net, int index, const char** nam
     NCNN_RS_CATCH
 }
 
+extern "C" int ncnn_rs_net_layer_bottom(ncnn_net_t net, int index, int bottom)
+{
+    NCNN_RS_TRY
+    {
+        if (!net)
+            return -1;
+        const std::vector<ncnn::Layer*>& layers = ((ncnn::Net*)net->pthis)->layers();
+        if (index < 0 || (size_t)index >= layers.size())
+            return -1;
+        const ncnn::Layer* layer = layers[(size_t)index];
+        if (!layer || bottom < 0 || (size_t)bottom >= layer->bottoms.size())
+            return -1;
+        return layer->bottoms[(size_t)bottom];
+    }
+    NCNN_RS_CATCH
+}
+
 extern "C" int ncnn_rs_net_layer_shape(ncnn_net_t net, int index, int top, int blob_index,
                                        int* dims, int* w, int* h, int* d, int* c)
 {

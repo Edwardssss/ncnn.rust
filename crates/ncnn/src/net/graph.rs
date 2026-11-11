@@ -257,4 +257,94 @@ impl Net {
         }
         Ok(blobs)
     }
+    /// Reports the blobs more than one layer reads.
+    ///
+    /// Light mode releases a bottom blob once its first consumer ran, and the layer that produced it
+    /// cannot refill it, so a graph that reads one blob twice returns wrong values under light mode.
+    /// An explicit `Split` layer gives each consumer its own blob and keeps the graph compatible.
+    /// [`Extractor::set_light_mode`](crate::Extractor::set_light_mode) and
+    /// [`Net::extractor`](Self::extractor) reject enabling light mode while this list is not empty,
+    /// and the result is cached until the graph is cleared or loaded again.
+    pub fn shared_blobs(&self) -> Result<Vec<String>> {
+        if !self.ready {
+            return Err(Error::invalid(
+                "Load parameters and weights before reading the graph",
+            ));
+        }
+        if let Some(cached) = self.shared_blobs.borrow().clone() {
+            return Ok(cached);
+        }
+        let mut counts =
+            vec![0u32; unsafe { sys::ncnn_rs_net_blob_count(self.raw) }.max(0) as usize];
+        let layers = unsafe { sys::ncnn_rs_net_layer_count(self.raw) };
+        for index in 0..layers.max(0) {
+            let mut bottoms = 0;
+            let mut tops = 0;
+            let mut name = std::ptr::null();
+            let mut kind = std::ptr::null();
+            let mut typeindex = 0;
+            let mut flags = 0;
+            let code = unsafe {
+                sys::ncnn_rs_net_layer_info(
+                    self.raw,
+                    index,
+                    &mut name,
+                    &mut kind,
+                    &mut typeindex,
+                    &mut bottoms,
+                    &mut tops,
+                    &mut flags,
+                )
+            };
+            if code != 0 {
+                continue;
+            }
+            for bottom in 0..bottoms {
+                let blob = unsafe { sys::ncnn_rs_net_layer_bottom(self.raw, index, bottom) };
+                if blob < 0 {
+                    continue;
+                }
+                if let Some(slot) = counts.get_mut(blob as usize) {
+                    *slot += 1;
+                }
+            }
+        }
+        let mut shared = Vec::new();
+        for (index, count) in counts.iter().enumerate() {
+            if *count < 2 {
+                continue;
+            }
+            let mut name = std::ptr::null();
+            let mut dims = 0;
+            let mut w = 0;
+            let mut h = 0;
+            let mut d = 0;
+            let mut c = 0;
+            let mut producer = 0;
+            let mut consumer = 0;
+            let code = unsafe {
+                sys::ncnn_rs_net_blob_info(
+                    self.raw,
+                    index as i32,
+                    &mut name,
+                    &mut dims,
+                    &mut w,
+                    &mut h,
+                    &mut d,
+                    &mut c,
+                    &mut producer,
+                    &mut consumer,
+                )
+            };
+            if code == 0 && !name.is_null() {
+                shared.push(
+                    unsafe { CStr::from_ptr(name) }
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+        *self.shared_blobs.borrow_mut() = Some(shared.clone());
+        Ok(shared)
+    }
 }

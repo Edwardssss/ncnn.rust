@@ -123,21 +123,28 @@ the network options do not, and they survive that restart:
 
 ```rust
 let mut ex = net.extractor()?;
-ex.set_light_mode(false);
+if net.shared_blobs()?.is_empty() {
+    ex.set_light_mode(true)?;
+}
 ex.set_kvcache_max_seqlen_hint(2048)?;
 ```
 
 A graph that keeps state across inputs, such as an attention cache for token-by-token decoding,
 calls `ex.continue_session()` before the next input so that input extends the cached state instead
-of restarting the request.
+of restarting the request. Light mode releases each intermediate after its first consumer, so
+`set_light_mode(true)` is refused while `net.shared_blobs()` lists a blob that feeds two layers;
+insert an explicit `Split` layer or keep light mode off.
 
 Part of a tensor is readable without copying it. A view aliases the source storage: the slice
-readers borrow it, `to_f32` copies out of it, and submitting the view as an input copies because an
-alias keeps no storage of its own:
+readers borrow it, `to_f32` copies out of it, and `Extractor::input` copies it because an alias keeps
+no storage of its own. `Net::infer_view_into` reads the region where it lives, which is the
+zero-copy form for a model that takes a crop, a channel or one batch item:
 
 ```rust
-let plane = output.channel(0)?;
-let values = plane.to_f32()?;
+let mut buffer = Vec::new();
+let ranges = net.infer_view_into(&[("input", &image.channel(0)?)], &["output"], &mut buffer)?;
+let range = &ranges[0].values;
+let values = &buffer[range.start..range.end];
 ```
 
 A network and its extractor stay on the thread that created them, so a service gives each worker its

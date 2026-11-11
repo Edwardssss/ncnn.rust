@@ -96,17 +96,21 @@ extractor 可以安全复用：提交输入会重启本次请求，因此第二�
 
 ```rust
 let mut ex = net.extractor()?;
-ex.set_light_mode(false);
+if net.shared_blobs()?.is_empty() {
+    ex.set_light_mode(true)?;
+}
 ex.set_kvcache_max_seqlen_hint(2048)?;
 ```
 
-跨输入保留状态的图（例如逐 token 解码时的注意力缓存）在下一个输入前调用 `ex.continue_session()`，该输入便延续缓存状态而不重启请求。
+跨输入保留状态的图（例如逐 token 解码时的注意力缓存）在下一个输入前调用 `ex.continue_session()`，该输入便延续缓存状态而不重启请求。light mode 会在第一个消费者之后释放中间张量，因此只要 `net.shared_blobs()` 列出被两层读取的 blob，`set_light_mode(true)` 就会被拒绝；请插入显式 `Split` 层或保持 light mode 关闭。
 
-张量的一部分可以直接读取而不复制。视图别名源存储：切片读取直接借用，`to_f32` 从中拷贝，而把视图作为输入提交时会复制，因为别名不持有自己的存储：
+张量的一部分可以直接读取而不复制。视图别名源存储：切片读取直接借用，`to_f32` 从中拷贝，而 `Extractor::input` 会复制，因为别名不持有自己的存储。`Net::infer_view_into` 就地读取该区域，适合以裁剪块、单通道或单个 batch 项作为输入的模型：
 
 ```rust
-let plane = output.channel(0)?;
-let values = plane.to_f32()?;
+let mut buffer = Vec::new();
+let ranges = net.infer_view_into(&[("input", &image.channel(0)?)], &["output"], &mut buffer)?;
+let range = &ranges[0].values;
+let values = &buffer[range.start..range.end];
 ```
 
 网络与 extractor 留在创建它们的线程上，因此服务端为每个工作线程准备一对；[多线程示例](crates/ncnn/examples/threads.rs)对比了它与"单个网络用满所有核心"两种形式。
