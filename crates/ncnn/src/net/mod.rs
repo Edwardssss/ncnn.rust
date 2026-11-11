@@ -265,25 +265,23 @@ impl Net {
     pub fn reuses_blob_memory(&self) -> bool {
         self.pools.is_some()
     }
-    /// Returns the native layer handle at `index` for advanced C API calls.
+    /// Borrows the layer the loaded graph holds at `index`.
     ///
-    /// [`layers`](Self::layers) describes the same layer without handing out a handle. The handle
-    /// belongs to the network and stays valid until the graph is cleared or reloaded; ncnn exposes
-    /// no mutation API on it through its C interface other than the model loading the crate already
-    /// performs, so this is an inspection and interop hook rather than a way to reshape a graph.
-    ///
-    /// # Safety
-    ///
-    /// The caller must not destroy the layer, replace its fields, or call into it while a request
-    /// runs on this network.
-    pub unsafe fn layer_handle(&self, index: usize) -> Result<sys::ncnn_layer_t> {
+    /// [`layers`](Self::layers) describes the same layer without handing out a handle. The returned
+    /// [`GraphLayer`](crate::GraphLayer) owns the C handle and lets the layer reach the raw module,
+    /// which is where the support flags, the userdata and the weight loading of a layer live. The
+    /// native layer itself belongs to this network and stays valid until the graph is cleared or
+    /// reloaded, so the borrow ends before either happens.
+    pub fn layer_handle(&self, index: usize) -> Result<crate::GraphLayer<'_>> {
         let index =
             i32::try_from(index).map_err(|_| Error::invalid("Layer index exceeds native range"))?;
-        let raw = sys::ncnn_rs_net_layer_handle(self.raw, index);
+        // The adapter allocates a handle around the layer this network owns; the guard releases
+        // that handle and leaves the layer alone.
+        let raw = unsafe { sys::ncnn_rs_net_layer(self.raw, index) };
         if raw.is_null() {
             return Err(Error::invalid("Layer index is outside the loaded graph"));
         }
-        Ok(raw)
+        Ok(crate::GraphLayer::borrowed(raw))
     }
     /// Runs owned inputs and returns validated, independently owned final buffers.
     ///

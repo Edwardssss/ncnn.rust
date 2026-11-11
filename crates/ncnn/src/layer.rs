@@ -128,6 +128,41 @@ impl Drop for Layer {
     }
 }
 
+/// A layer a loaded graph owns, borrowed for native calls.
+///
+/// [`Net::layer_handle`](crate::Net::layer_handle) builds one for an index the graph loaded. The
+/// native layer belongs to the network and stays valid until the graph is cleared or reloaded,
+/// while this value owns only the C handle around it, which releases on drop and never destroys the
+/// layer. The borrow of the network keeps the layer alive for as long as the handle exists. A
+/// registered custom layer keeps its userdata, so a native call that rewrites userdata breaks the
+/// registration.
+pub struct GraphLayer<'net> {
+    raw: sys::ncnn_layer_t,
+    _net: std::marker::PhantomData<&'net crate::Net>,
+}
+impl<'net> GraphLayer<'net> {
+    pub(crate) fn borrowed(raw: sys::ncnn_layer_t) -> Self {
+        Self {
+            raw,
+            _net: std::marker::PhantomData,
+        }
+    }
+    /// Borrows the native layer handle.
+    ///
+    /// The handle is the one the C API expects. Native calls that write through it, or that read a
+    /// tensor, follow the same rules as the rest of the raw module: the graph stays loaded and no
+    /// request runs on the network meanwhile.
+    pub fn as_raw(&self) -> sys::ncnn_layer_t {
+        self.raw
+    }
+}
+impl Drop for GraphLayer<'_> {
+    fn drop(&mut self) {
+        // Only the C handle is released; the layer stays with the network.
+        unsafe { sys::ncnn_rs_borrowed_layer_release(self.raw) };
+    }
+}
+
 /// A ModelBin backed by owned, deep-copied tensors.
 pub struct ModelBin {
     raw: sys::ncnn_modelbin_t,

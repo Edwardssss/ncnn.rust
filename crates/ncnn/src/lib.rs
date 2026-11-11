@@ -4,6 +4,13 @@
 //! storage. Owned input removes the aliasing question at the API boundary: [`Net::infer`]
 //! returns independent vectors and [`Extractor::extract`] borrows a scored CPU output.
 //!
+//! One extractor serves repeated requests: [`Extractor::input`] restarts the native handle once a
+//! request extracted, so a second request recomputes instead of returning the cached answer, and
+//! [`Extractor::continue_session`] keeps that cache when a graph carries state across inputs. A
+//! tensor exposes read-only sub views ([`Mat::channel`], [`Mat::row_range`] and their siblings),
+//! which alias its storage: the slice readers borrow it, and the copying readers and the submit path
+//! copy out of it.
+//!
 //! The forms that return independent storage allocate and free an output-sized buffer per request,
 //! which is the dominant cost of a small request on a host whose heap returns freed pages to the
 //! kernel. [`heap::retain_pages`] keeps those pages mapped on glibc Linux,
@@ -22,6 +29,15 @@
 //!     ex = net.extractor().unwrap();
 //! }
 //! drop(ex);
+//! ```
+//!
+//! ```compile_fail
+//! let layer;
+//! {
+//!     let net = ncnn_rust::Net::new().unwrap();
+//!     layer = net.layer_handle(0).unwrap();
+//! }
+//! drop(layer);
 //! ```
 #![deny(missing_docs)]
 
@@ -42,7 +58,7 @@ pub use reader::DataReader;
 mod param;
 
 pub use error::{Error, Result};
-pub use layer::{layer_type_index, Layer, ModelBin};
+pub use layer::{layer_type_index, GraphLayer, Layer, ModelBin};
 pub use mat::{
     BorderMode, Borders, ElementKind, Mat, MatView, PixelFormat, ReshapeView, TensorInfo,
 };

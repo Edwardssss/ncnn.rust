@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 const GRAPH: &str = "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n";
 const ELEMENTS: usize = 65536;
-const REQUESTS: usize = 200;
+const REQUESTS: usize = 1000;
+const ROUNDS: usize = 3;
 
 fn build(native_threads: usize) -> Net {
     Net::builder()
@@ -53,31 +54,42 @@ fn parallel(workers: usize, requests: usize) -> Duration {
     start.elapsed()
 }
 
-fn report(label: &str, workers: usize, elapsed: Duration) {
-    let requests = workers * REQUESTS;
-    let seconds = elapsed.as_secs_f64();
+/// Runs one configuration for [`ROUNDS`] rounds and returns the median microseconds per request.
+fn median_of(mut run: impl FnMut() -> Duration) -> f64 {
+    let mut samples: Vec<f64> = (0..ROUNDS)
+        .map(|_| run().as_secs_f64() * 1e6 / REQUESTS as f64)
+        .collect();
+    samples.sort_by(|a, b| a.partial_cmp(b).expect("finite durations"));
+    samples[samples.len() / 2]
+}
+
+fn report(label: &str, workers: usize, us_per_request: f64) {
     println!(
-        "{label:<24} {workers:>7} {requests:>9} {:>12.0} {:>12.1}",
-        requests as f64 / seconds,
-        seconds * 1e6 / requests as f64
+        "{label:<24} {workers:>7} {:>9} {:>12.0} {us_per_request:>12.1}",
+        workers * REQUESTS,
+        workers as f64 * 1e6 / us_per_request
     );
 }
 
 fn main() {
-    serve(1, 1);
     let cores = thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(1);
+    serve(1, 1);
     println!(
         "{:<24} {:>7} {:>9} {:>12} {:>12}",
         "mode", "workers", "requests", "requests/s", "us/request"
     );
-    report("one network, every core", 1, serve(cores, REQUESTS * 4));
+    report(
+        "one network, every core",
+        1,
+        median_of(|| serve(cores, REQUESTS)),
+    );
     for workers in [1, 2, cores.min(4)] {
         report(
             "one network per worker",
             workers,
-            parallel(workers, REQUESTS),
+            median_of(|| parallel(workers, REQUESTS)),
         );
     }
     println!("\n{cores} logical cores available; native thread count is one per worker.");

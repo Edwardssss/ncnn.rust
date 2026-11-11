@@ -48,9 +48,10 @@ fn main() -> ncnn_rust::Result<()> {
 `PixelImage` checks color formats, stride and ROI before conversion or resizing. Read-only tensor
 views borrow their tensor and expose logical initialized data: `Mat::channel`, `channel_range`,
 `depth`, `depth_range`, `column_range`, `row_range`, `batch` and `batch_range` return a `MatView`
-that aliases the source storage and copies only when it is read or submitted as an input. `input`
-transfers crate-owned storage; raw-adopted inputs are copied so external storage dependencies stay
-with the caller.
+that aliases the source storage, so the slice readers borrow it and the copying readers, like
+`to_f32`, copy out of it; submitting a view as an input copies as well. `input` transfers
+crate-owned storage; raw-adopted inputs are copied so external storage dependencies stay with the
+caller.
 
 Batched storage is built with `Mat::from_f32_batch`, and `TensorInfo::n` reports the batch count.
 `Mat::into_normalized` and `Mat::into_reshape` consume a tensor the caller no longer needs, which lets

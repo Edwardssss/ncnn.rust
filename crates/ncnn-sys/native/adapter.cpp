@@ -551,22 +551,6 @@ extern "C" int ncnn_rs_extractor_extract_stored_index(ncnn_extractor_t ex, int i
     }
     NCNN_RS_CATCH
 }
-extern "C" ncnn_layer_t ncnn_rs_net_layer_handle(ncnn_net_t net, int index)
-{
-    try
-    {
-        if (!net)
-            return 0;
-        const std::vector<ncnn::Layer*>& layers = ((ncnn::Net*)net->pthis)->layers();
-        if (index < 0 || (size_t)index >= layers.size())
-            return 0;
-        return (ncnn_layer_t)layers[(size_t)index];
-    }
-    catch (...)
-    {
-        return 0;
-    }
-}
 extern "C" int ncnn_rs_mat_reshape(ncnn_mat_t mat, int dims, const int* s, int independent, ncnn_mat_t* out)
 {
     NCNN_RS_TRY

@@ -116,11 +116,13 @@ construction per request, which stays inside the spread of these runs.
 ## Worker scaling
 
 `cargo run --release --example threads` on both hosts, 65536 elements and one ReLU layer, native
-thread count one per worker. Three Windows runs reported 192 to 221 us per request for one network
-over all 16 logical cores, 147 to 188 us for one worker on one thread, 95 to 101 us for two workers
-and 44 to 57 us for four, and one WSL2 run reported 108, 38, 27 and 9 us on 8 logical cores. The
-native thread pool returns little on a graph this small, while independent workers scale the
-aggregate, and the spread between runs of one configuration follows the load of the host.
+thread count one per worker, 1000 requests per round and the median of three rounds. The WSL2 guest
+on 8 logical cores reported 40k to 42k requests per second (24 to 25 us each) for one network over
+every core, 38k to 41k (24 to 27 us) for one worker, 71k to 80k (25 to 28 us) for two and 102k to
+114k (35 to 39 us) for four. The native pool therefore costs what one worker on one thread costs on a
+graph this small, and independent workers multiply the aggregate throughput. The Windows host
+reported 11k to 47k requests per second across the same configurations in three runs, a spread that
+follows the load of that host rather than the configuration.
 
 ## Windows heap and Vulkan runs
 

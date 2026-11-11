@@ -193,14 +193,16 @@ impl Extractor<'_> {
     }
     /// Replaces the native handle when a request already ran, and re-applies the settings.
     fn restart(&mut self, force: bool) -> Result<()> {
-        if !force && !self.extracted.replace(false) {
+        if !force && !self.extracted.get() {
             return Ok(());
         }
-        self.extracted.set(false);
         let raw = unsafe { sys::ncnn_extractor_create(self._net.raw) };
         if raw.is_null() {
+            // The previous handle stays, and it still reports that it extracted, so a later call
+            // retries the restart instead of reading its cache.
             return Err(Error::Native(-100));
         }
+        self.extracted.set(false);
         let stale = std::mem::replace(&mut self.raw, raw);
         unsafe { sys::ncnn_extractor_destroy(stale) };
         unsafe {

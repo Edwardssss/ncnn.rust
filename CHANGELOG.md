@@ -74,8 +74,9 @@ library upgrade is a minor change of this crate.
   return a `MatView`, a read-only alias of part of the tensor that copies only when it goes back in
   as an input. `Mat::is_empty` reports a tensor without storage, and `TensorInfo::total` and
   `TensorInfo::shape` report the native storage slots and the extent of each axis.
-- `Net::layer_handle` exposes the native layer the loaded graph holds at an index for advanced C API
-  calls, next to the `Net::layers` description of the same layer.
+- `Net::layer_handle` returns a `GraphLayer`, the layer the loaded graph holds at an index, for the
+  native layer calls the raw module exposes, next to the `Net::layers` description of the same layer.
+  The guard owns the C handle and releases it on drop, while the layer stays with the network.
 - `crates/ncnn/examples/threads.rs` runs one network per worker thread and reports the aggregate
   throughput next to a single network that uses every core.
 - The nightly fuzz workflow also fuzzes the pixel view and the typed tensor paths, so the buffer

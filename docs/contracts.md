@@ -10,6 +10,8 @@ differences are in [layer coverage](layer-coverage.md).
 
 An extractor borrows its network. The default options retain intermediate blobs (`lightmode = false`) for multi-output graphs. Applications may enable light mode for graphs with explicit Split nodes and matching consumption semantics. Configuration and loading require mutable access before extraction. Owned input methods transfer storage created or independently cloned by the crate; tensors adopted through raw handles are copied because their storage/allocator dependencies remain caller-managed. `Net::infer` returns independent final Rust vectors, and `infer_into` returns metadata and ranges into the caller's vector. Final-vector extraction copies validated logical FP32 elements while the native source is live and excludes native padding. Output handles are released on success and failure. Input setup failure preserves the old `infer_into` buffer; output failure leaves only completed output prefixes, with no ranges returned. Publication occurs after success when transactional results are required.
 
+One extractor runs any number of requests. The native extractor caches the blobs a request produced and recomputes a layer only while its output blob is empty, so `input` and `input_borrowed` restart the handle once a request extracted: the wrapper destroys the native extractor, creates another from the same network and re-applies the per-extractor overrides, so a reused handle answers each request from a fresh cache instead of returning the previous answer. `Extractor::clear` performs that restart explicitly, a handle that never extracted is submitted to directly, and `Extractor::continue_session` opts the next input out of the restart, which carries a native key/value cache across inputs. The overrides are `set_light_mode`, the blob, workspace and key/value cache allocators, and the cache length hint; they apply to one handle and leave the network options unchanged. Light mode sets a graph restriction of its own: ncnn releases a bottom blob after its first consumer and refills it from its producer, so a blob that feeds several layers, including an input consumed twice, needs light mode off.
+
 `extract` returns an `OutputGuard` with an exclusive extractor borrow. The guard owns and releases the returned native handle; its private tensor cannot escape as a `Mat` or raw handle. Slices borrow the guard. The extractor and network therefore remain alive, and input replacement, re-extraction and destruction remain unavailable until the guard is dropped. Forgetting a guard can leak its handle but cannot extend a slice borrow. The guard exposes metadata, checked read-only FP32 views, explicit vector copying and `detach()`, which deep-copies into an independent `Mat`. It never transfers the potentially shared native storage. Model semantics determine whether FP32 interpretation is meaningful; the checks establish storage layout rather than semantic dtype.
 
 This path supports built-in CPU layers with safe configuration. Custom-layer registration, native path model loading (including optional mapping), or exporting a network/extractor raw handle permanently disables guard extraction for that object; exporting an options raw handle disables guard extraction in networks subsequently configured from those options. These conservative eligibility flags prevent custom allocators, callbacks, external output storage or raw extractor input from being mistaken for crate-managed dependencies. Final-vector extraction remains available. Raw-adopted inputs retain the provenance-protection copy in `input`. Native raw writers must also preserve all existing tensor and guard borrows.
@@ -70,6 +72,10 @@ kernel a graph selects at run time. A layer that recorded no shape reports zero 
 failing the call. `layer_type_index` resolves a type name to the index those views report, which is
 the index that type-index registration replaces. `BlobInfo` reports the wiring, the recorded shape and
 `has_shape`, and the extents stay at zero until a graph resize or an input fixes the shape.
+`Net::layer_handle` returns a `GraphLayer` guard around the layer the graph owns at an index, which
+reaches the raw layer calls: the support flags, the userdata and the weight loading. The guard
+releases the C handle on drop, while the layer stays with the network, and a registered custom layer
+keeps the userdata its registration holds.
 
 ## Tensors
 
@@ -96,6 +102,15 @@ also serves Vulkan networks, whose extraction downloads into network-owned CPU s
 that copy from the pool allocator.
 
 Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
+
+`Mat::channel`, `channel_range`, `depth`, `depth_range`, `column_range`, `row_range`, `batch` and
+`batch_range` return a `MatView`, a read-only alias of part of the tensor. The view borrows the
+source, so the source outlives it and cannot be mutated while it lives; it drops the native header
+without releasing storage, because a sub view carries no refcount. Each call range-checks the axis
+against the extents the tensor records, and a view that reaches an extractor copies, since an alias
+keeps no storage of its own. `Mat::is_empty` reports a tensor whose storage was never created,
+`TensorInfo::total` reports the native storage slots including padding, and `TensorInfo::shape`
+reports the four extents in native axis order.
 
 `fill`, `normalize_in_place` and `into_normalized` write through the tensor, so they accept only
 storage this crate owns: an adopted raw handle or an external buffer is refused with `Error::Invalid`,

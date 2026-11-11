@@ -131,8 +131,9 @@ A graph that keeps state across inputs, such as an attention cache for token-by-
 calls `ex.continue_session()` before the next input so that input extends the cached state instead
 of restarting the request.
 
-Part of a tensor is readable without copying it. A view aliases the source storage and copies only
-when it is read or submitted as an input:
+Part of a tensor is readable without copying it. A view aliases the source storage: the slice
+readers borrow it, `to_f32` copies out of it, and submitting the view as an input copies because an
+alias keeps no storage of its own:
 
 ```rust
 let plane = output.channel(0)?;
@@ -171,21 +172,35 @@ the arithmetic dominates:
 | ReLU | Vulkan | 0.193 ms | 0.197 ms |
 | AbsVal | Vulkan | 0.183 ms | 0.221 ms |
 
-Preprocessing and tensor lifecycle, median microseconds:
+Preprocessing and tensor lifecycle, median microseconds over 65536 FP32 elements. The copy forms
+return independent storage, so the native column carries the in-place and the independent reference
+next to the wrapper:
 
-| Operation | native | ncnn-rust |
-|---|---:|---:|
-| create and copy | 6.022 | 7.043 |
-| RGB conversion | 75.769 | 79.125 |
-| clone and normalize | 12.958 | 28.366 |
+| Operation | native, in place | native, independent | ncnn-rust |
+|---|---:|---:|---:|
+| create and copy | 6.022 | 6.022 | 7.043 |
+| RGB conversion | 75.769 | 75.769 | 79.125 |
+| clone and normalize | 12.958 | 26.618 | 28.366 |
+| reshape | 7.221 | 15.607 | 16.892 |
 
-Normalization and reshape return independent storage here, where the native entry mutates or shares
-it, which accounts for that row. A request also allocates inside the engine:
+The middle column is the reference for the rows that allocate: the gap to the in-place form is one
+full-tensor copy, not wrapper overhead. The in-repo benchmark reports the same split at 4.8 to 5.4
+microseconds for `normalize_in_place` against 25 to 39 for the copying form, and 0.2 to 0.4 for
+`into_reshape` against 27 for `reshape`. A request also allocates inside the engine:
 `NetBuilder::reuse_blob_memory()` gives the network's intermediate tensors a pool it owns, which is
 the measured lever on both hosts, and the reuse forms (`infer_into`, `infer_borrowed_into`) remove the
-caller-side vector. Linux hosts show the same ranking through page faults, and
-`ncnn_rust::heap::retain_pages()` keeps the pages of a caller-allocated buffer mapped. The method, the
-full tables, the pooled and Linux measurements and the reproduction commands are in
+caller-side vector. On one 65536-element ReLU request, the pooled network moves the owned-output form
+from 332 to 147 microseconds on Windows and from 227 to 23 microseconds on a WSL2 glibc guest, while
+the borrowed-buffer form drops from 41 to 19 and from 23 to 17. Linux hosts show the same ranking
+through page faults, and `ncnn_rust::heap::retain_pages()` keeps the pages of a caller-allocated
+buffer mapped.
+
+One network per worker thread scales a service. On an 8-core WSL2 guest, four workers reach 102k to
+114k requests per second against 38k to 41k for one worker, while a single network that uses every
+core lands at 40k to 42k: the native thread pool and one worker on one thread cost the same on a
+graph this small, and independent workers multiply the throughput. A busy host moves those figures
+by several times, so the example reports the median of three rounds. The method, the full tables,
+the pooled, worker and Linux measurements and the reproduction commands are in
 [Performance](docs/performance.md).
 
 ## Documentation

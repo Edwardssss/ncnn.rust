@@ -260,10 +260,17 @@ fn tensor_views_alias_the_source() {
 #[test]
 fn layer_handles_follow_the_loaded_graph() {
     let net = reuse_net();
-    assert_eq!(net.layers().unwrap().len(), 3);
-    let handle = unsafe { net.layer_handle(0) }.unwrap();
-    assert!(!handle.is_null());
-    assert!(unsafe { net.layer_handle(3) }.is_err());
+    let layers = net.layers().unwrap();
+    assert_eq!(layers.len(), 3);
+
+    // The handle is the C struct the raw module expects, so a native read of a support flag
+    // answers what the graph description reports for the same layer.
+    let layer = net.layer_handle(0).unwrap();
+    assert_eq!(
+        unsafe { ncnn_rust::sys::ncnn_rs_layer_flag(layer.as_raw(), 0, 0, 0) },
+        i32::from(layers[0].support_int8_storage)
+    );
+    assert!(net.layer_handle(3).is_err());
 }
 
 #[test]

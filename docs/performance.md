@@ -62,29 +62,29 @@ Normalization and reshape in `ncnn-rust` return independent storage, so the matc
 reference is the independent column; those rows sit within the campaign spread of it. The gap
 against the in-place column is the cost of one full-tensor copy, not wrapper overhead.
 
-The in-repo benchmark separates the same helpers, taken on one Windows host and reported as the
-minimum of three runs to limit host noise:
+The in-repo benchmark separates the same helpers. `api_benchmark preprocess 100 65536` on one
+Windows host, three runs, minimum to maximum of the medians to show the host noise:
 
 | Helper | median us | note |
 |---|---:|---|
-| borrow (`from_external`) | 0.083 | header only |
-| `deep_clone` | 13.309 | allocation and one copy |
-| `reshape` | 12.174 | detaches because the native result aliases |
-| `into_reshape` | 0.174 | rewrites the header |
-| `normalized` | 13.328 | one pass into fresh storage |
-| `normalize_in_place` | 4.910 | the same pass, resident storage |
-| `flatten` | 0.984 | |
-| `with_packing(4)` | 1.115 | |
-| `copy_make_border` | 23.797 | 1 MB output |
-| `to_pixels` | 36.776 | |
-| `warp_affine` | 251.441 | bilinear, full frame |
+| borrow (`from_external`) | 0.11 to 0.31 | header only |
+| `deep_clone` | 19.4 to 41.6 | allocation and one copy |
+| `reshape` | 26.8 to 43.9 | detaches because the native result aliases |
+| `into_reshape` | 0.18 to 0.39 | rewrites the header |
+| `normalized` | 25.1 to 38.6 | one pass into fresh storage |
+| `normalize_in_place` | 4.8 to 5.4 | the same pass, resident storage |
+| `flatten` | 1.0 to 1.3 | |
+| `with_packing(4)` | 0.9 to 1.1 | |
+| `copy_make_border` | 66.6 to 103.7 | 260 KB output |
+| `to_pixels` | 36.4 to 36.9 | |
+| `warp_affine` | 246.4 to 248.0 | bilinear, full frame |
 
 `normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one pass
 over the destination, so the copying form costs what a bare `deep_clone` costs instead of a clone
 followed by a native layer that walks the buffer again. Allocation and first touch dominate every row
-that allocates, which is why a rotation of the cases and a minimum over runs is used. CI runs the same
-command in a debug build as a smoke check, so its printed medians verify the path rather than the
-timings.
+that allocates, which is why a rotation of the cases and several runs are used rather than one pass.
+CI runs the same command in a debug build as a smoke check, so its printed medians verify the path
+rather than the timings.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
@@ -150,24 +150,26 @@ two settings are independent.
 
 A network and its extractor are single-threaded: both borrow their owning thread, so a service
 scales by giving each worker its own pair. `crates/ncnn/examples/threads.rs` builds that pair inside
-every worker and sets the native thread count to one, then times a single network that uses every
-core on the same graph. 65536 elements, one ReLU layer; the Windows figures are three runs of one
-configuration each, the WSL2 figures one run:
+every worker with the native thread count at one, and reports the aggregate throughput next to a
+single network that uses every core. 65536 elements, one ReLU layer, 1000 requests per round, median
+of three rounds, on the WSL2 guest with 8 logical cores:
 
-| Mode | Windows, 16 cores | WSL2 glibc, 8 cores |
+| Configuration | requests/s | us per request |
 |---|---:|---:|
-| one network, every core, 1 worker | 192 to 221 us per request | 108 us per request |
-| one network per worker, 1 worker | 147 to 188 us per request | 38 us per request |
-| one network per worker, 2 workers | 95 to 101 us per request | 27 us per request |
-| one network per worker, 4 workers | 44 to 57 us per request | 9 us per request |
+| one network, every core | 40k to 42k | 24 to 25 |
+| one network per worker, 1 worker | 38k to 41k | 24 to 27 |
+| one network per worker, 2 workers | 71k to 80k | 25 to 28 |
+| one network per worker, 4 workers | 102k to 114k | 35 to 39 |
 
-The native thread pool returns little on a graph this small, because each request dispatches over
-the pool and waits: one worker that spreads the request over every core lands within a small factor
-of one worker on one thread. Independent workers then scale within the core budget, and four workers
-reach two to four times the aggregate throughput of one. A graph whose layers are heavy enough to
-amortize the dispatch cost moves the other way, so the choice is a measurement rather than a rule;
-the example prints both forms for the graph an application uses. The host load moves these figures
-between runs, which is why the table gives the spread instead of a single median.
+The native thread pool and one worker on one thread reach the same per-request cost on a graph this
+small, where dispatch rather than arithmetic dominates; the pool neither wins nor loses. Independent
+workers then multiply the aggregate: four workers reach 2.5 to 2.9 times the single-worker
+throughput at 1.4 times the latency, because they share the cores. A graph whose layers are heavy
+enough to amortize the dispatch cost moves the other way, so the choice is a measurement rather than
+a rule, and the example prints both forms for the graph an application uses. The Windows host shows
+the same ranking with a much wider spread, 11k to 47k requests per second across the configurations,
+because other work on that host moves the figures by several times; the table therefore reports the
+guest, whose three runs agree.
 
 ## Allocator choice
 
