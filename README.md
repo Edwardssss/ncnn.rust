@@ -179,35 +179,57 @@ the arithmetic dominates:
 | ReLU | Vulkan | 0.193 ms | 0.197 ms |
 | AbsVal | Vulkan | 0.183 ms | 0.221 ms |
 
-Preprocessing and tensor lifecycle, median microseconds over 65536 FP32 elements. The copy forms
-return independent storage, so the native column carries the in-place and the independent reference
-next to the wrapper:
+Preprocessing and tensor lifecycle, median microseconds over 65536 FP32 elements, one core, minimum
+of three runs:
 
-| Operation | native, in place | native, independent | ncnn-rust |
-|---|---:|---:|---:|
-| create and copy | 6.022 | 6.022 | 7.043 |
-| RGB conversion | 75.769 | 75.769 | 79.125 |
-| clone and normalize | 12.958 | 26.618 | 28.366 |
-| reshape | 7.221 | 15.607 | 16.892 |
+| Operation | ncnn-rust |
+|---|---:|
+| borrow (`Mat::from_external`) | 0.09 |
+| `deep_clone` | 11.6 |
+| `reshape` | 12.5 |
+| `into_reshape` | 0.19 |
+| `normalized` | 17.7 |
+| `normalize_in_place` | 4.7 |
+| `flatten` | 0.92 |
+| `with_packing(4)` | 0.91 |
+| `copy_make_border` | 34.5 |
+| `to_pixels` | 36.7 |
+| `warp_affine` | 250.2 |
 
-The middle column is the reference for the rows that allocate: the gap to the in-place form is one
-full-tensor copy, not wrapper overhead. The in-repo benchmark reports the same split at 4.8 to 5.4
-microseconds for `normalize_in_place` against 25 to 39 for the copying form, and 0.2 to 0.4 for
-`into_reshape` against 27 for `reshape`. A request also allocates inside the engine:
-`NetBuilder::reuse_blob_memory()` gives the network's intermediate tensors a pool it owns, which is
-the measured lever on both hosts, and the reuse forms (`infer_into`, `infer_borrowed_into`) remove the
-caller-side vector. On one 65536-element ReLU request, the pooled network moves the owned-output form
-from 332 to 147 microseconds on Windows and from 227 to 23 microseconds on a WSL2 glibc guest, while
-the borrowed-buffer form drops from 41 to 19 and from 23 to 17. Linux hosts show the same ranking
-through page faults, and `ncnn_rust::heap::retain_pages()` keeps the pages of a caller-allocated
-buffer mapped.
+The forms that return independent storage pay one allocation and one copy: `normalized` lands at
+about 1.5 times a bare `deep_clone` and the in-place form at 4.7 microseconds, while `borrow`,
+`into_reshape`, `flatten` and `with_packing` rewrite or lend a header and stay under a microsecond.
+The native reference for the copying forms, including the independent-storage column, is in
+[Performance](docs/performance.md).
 
-One network per worker thread scales a service. On an 8-core WSL2 guest, four workers reach 102k to
-114k requests per second against 38k to 41k for one worker, while a single network that uses every
-core lands at 40k to 42k: the native thread pool and one worker on one thread cost the same on a
-graph this small, and independent workers multiply the throughput. A busy host moves those figures
-by several times, so the example reports the median of three rounds. The method, the full tables,
-the pooled, worker and Linux measurements and the reproduction commands are in
+A request also allocates inside the engine: `NetBuilder::reuse_blob_memory()` gives the network's
+intermediate tensors a pool it owns, which is the measured lever on both hosts, and the reuse forms
+(`infer_into`, `infer_borrowed_into`) remove the caller-side vector. Microseconds per 65536-element
+ReLU request, one core:
+
+| Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
+|---|---:|---:|---:|---:|
+| `guard` (borrowed output) | 24.2 to 25.6 | 16.4 to 17.0 | 97.4 | 30.1 |
+| `extract_owned` (owned output) | 220 to 225 | 22.8 to 22.9 | 194.8 | 84.4 |
+| `infer_into` (owned input, reused buffer) | 29.7 to 31.9 | 22.7 to 23.6 | 97.4 | 37.1 |
+| `infer_borrowed_into` (borrowed input and buffer) | 22.0 to 23.1 | 16.4 to 17.3 | 39.8 | 18.1 |
+
+The guest numbers are the range of three runs, the Windows numbers the minimum of three runs on a
+host that other work was using, so its absolute values move by up to twice between runs while the
+ratio holds: the owned-output form gains 2 to 10 times, and the borrowed-buffer form, which allocates
+nothing on the caller side, still gains a quarter on the guest and about half on the Windows host from
+the pooled intermediates. Linux hosts show the same ranking through page faults, and
+`ncnn_rust::heap::retain_pages()` keeps the pages of a caller-allocated buffer mapped. The
+[thread example](crates/ncnn/examples/threads.rs) covers the next lever: a network and its extractor
+per worker, measured below.
+
+One network per worker thread scales a service. On an 8-core WSL2 guest, four workers reach 105k
+requests per second against 38k for one worker, while a single network that uses every core lands at
+42k: the native thread pool and one worker on one thread cost nearly the same on a graph this small,
+and independent workers multiply the throughput. On a 16-core Windows host the same ranking holds at
+45k to 62k for four workers against 13k to 17k for one network over every core, with a much wider
+spread because that host was shared. The example reports the median of three rounds. The method, the
+full tables, the pooled, worker and Linux measurements and the reproduction commands are in
 [Performance](docs/performance.md).
 
 ## Documentation

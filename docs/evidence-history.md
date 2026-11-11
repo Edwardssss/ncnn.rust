@@ -111,18 +111,30 @@ mode per host at 65536 elements: the WSL2 guest reported `guard` 16426 to 17228 
 23157 to 24121 ns, `infer_into` 22960 to 24310 ns and `infer_borrowed_into` 16911 to 17696 ns, and
 the Windows host reported `guard` 37474 ns, `extract_owned` 147012 ns, `infer_into` 48503 ns and
 `infer_borrowed_into` 18978 ns at 100 iterations. The restart costs one native extractor
-construction per request, which stays inside the spread of these runs.
+construction per request, which stays inside the spread of these runs. A third round on 2026-11-11,
+with both hosts pinned to one core, reproduced that ranking while the Windows host was shared:
+`guard` 30081 ns, `extract_owned` 84442 ns, `infer_into` 37113 ns and `infer_borrowed_into` 18102 ns
+pooled, against 97436, 194811, 97429 and 39843 ns on a default network.
 
 ## Worker scaling
 
 `cargo run --release --example threads` on both hosts, 65536 elements and one ReLU layer, native
 thread count one per worker, 1000 requests per round and the median of three rounds. The WSL2 guest
-on 8 logical cores reported 40k to 42k requests per second (24 to 25 us each) for one network over
-every core, 38k to 41k (24 to 27 us) for one worker, 71k to 80k (25 to 28 us) for two and 102k to
-114k (35 to 39 us) for four. The native pool therefore costs what one worker on one thread costs on a
-graph this small, and independent workers multiply the aggregate throughput. The Windows host
-reported 11k to 47k requests per second across the same configurations in three runs, a spread that
-follows the load of that host rather than the configuration.
+on 8 logical cores reported 41.7k requests per second (24.0 us each) for one network over every
+core, 37.6k (26.6 us) for one worker, 77.5k (25.8 us) for two and 104.6k (38.2 us) for four. The
+native pool therefore costs nearly what one worker on one thread costs on a graph this small, and
+independent workers multiply the aggregate throughput. The 16-core Windows host reported 13k to 17k
+requests per second for one network over every core and 45k to 62k for four workers in three runs, a
+spread that follows the load of that host rather than the configuration.
+
+## Preprocessing helpers
+
+`api_benchmark preprocess 200 65536` on the Windows host, pinned to one core, minimum of three runs:
+`borrow` 0.09 us, `deep_clone` 11.6, `reshape` 12.5, `into_reshape` 0.19, `normalized` 17.7,
+`normalize_in_place` 4.7, `flatten` 0.92, `with_packing(4)` 0.91, `copy_make_border` 34.5,
+`to_pixels` 36.7 and `warp_affine` 250.2. The same command without the affinity reported 19 to 42 us
+for `deep_clone`, which is what a shared host does to a benchmark bounded by allocation and first
+touch; pinning the process to one core cut that spread to under a tenth.
 
 ## Windows heap and Vulkan runs
 

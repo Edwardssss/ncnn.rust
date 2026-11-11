@@ -62,29 +62,29 @@ Normalization and reshape in `ncnn-rust` return independent storage, so the matc
 reference is the independent column; those rows sit within the campaign spread of it. The gap
 against the in-place column is the cost of one full-tensor copy, not wrapper overhead.
 
-The in-repo benchmark separates the same helpers. `api_benchmark preprocess 100 65536` on one
-Windows host, three runs, minimum to maximum of the medians to show the host noise:
+The in-repo benchmark separates the same helpers. `api_benchmark preprocess 200 65536` on one
+Windows host, pinned to one core, minimum of three runs:
 
 | Helper | median us | note |
 |---|---:|---|
-| borrow (`from_external`) | 0.11 to 0.31 | header only |
-| `deep_clone` | 19.4 to 41.6 | allocation and one copy |
-| `reshape` | 26.8 to 43.9 | detaches because the native result aliases |
-| `into_reshape` | 0.18 to 0.39 | rewrites the header |
-| `normalized` | 25.1 to 38.6 | one pass into fresh storage |
-| `normalize_in_place` | 4.8 to 5.4 | the same pass, resident storage |
-| `flatten` | 1.0 to 1.3 | |
-| `with_packing(4)` | 0.9 to 1.1 | |
-| `copy_make_border` | 66.6 to 103.7 | 260 KB output |
-| `to_pixels` | 36.4 to 36.9 | |
-| `warp_affine` | 246.4 to 248.0 | bilinear, full frame |
+| borrow (`from_external`) | 0.09 | header only |
+| `deep_clone` | 11.6 | allocation and one copy |
+| `reshape` | 12.5 | detaches because the native result aliases |
+| `into_reshape` | 0.19 | rewrites the header |
+| `normalized` | 17.7 | one pass into fresh storage |
+| `normalize_in_place` | 4.7 | the same pass, resident storage |
+| `flatten` | 0.92 | |
+| `with_packing(4)` | 0.91 | |
+| `copy_make_border` | 34.5 | 260 KB output |
+| `to_pixels` | 36.7 | |
+| `warp_affine` | 250.2 | bilinear, full frame |
 
 `normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one pass
-over the destination, so the copying form costs what a bare `deep_clone` costs instead of a clone
+over the destination, so the copying form costs about 1.5 times a bare `deep_clone` instead of a clone
 followed by a native layer that walks the buffer again. Allocation and first touch dominate every row
-that allocates, which is why a rotation of the cases and several runs are used rather than one pass.
-CI runs the same command in a debug build as a smoke check, so its printed medians verify the path
-rather than the timings.
+that allocates, and a shared host moved these medians by three times until the process was pinned to
+one core, which is why the table reports a minimum over runs. CI runs the same command in a debug
+build as a smoke check, so its printed medians verify the path rather than the timings.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
@@ -125,22 +125,23 @@ to the kernel that allocation costs more than the arithmetic. `NetBuilder::reuse
 the network one pool allocator for intermediate blobs and one for layer workspace, so every
 extractor takes that memory from the pool instead. The `api_benchmark pooled-request` mode times the
 four request forms on a pooled network next to the same forms on a default one, rotating the cases
-and reporting medians; 65536 elements, one thread, one run of the mode per host:
+and reporting medians; 65536 elements, one core, three runs per host:
 
 | Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
 |---|---:|---:|---:|---:|
-| `guard` (borrowed output) | 23731 ns | 16724 ns | 154280 ns | 37474 ns |
-| `extract_owned` (owned output) | 227135 ns | 23157 ns | 332489 ns | 147012 ns |
-| `infer_into` (owned input, reused buffer) | 31041 ns | 22960 ns | 155006 ns | 48503 ns |
-| `infer_borrowed_into` (borrowed input and buffer) | 22768 ns | 16911 ns | 40910 ns | 18978 ns |
+| `guard` (borrowed output) | 24217 to 25640 ns | 16711 to 16898 ns | 97436 ns | 30081 ns |
+| `extract_owned` (owned output) | 220482 to 225225 ns | 22813 to 22886 ns | 194811 ns | 84442 ns |
+| `infer_into` (owned input, reused buffer) | 29723 to 31880 ns | 22660 to 23586 ns | 97429 ns | 37113 ns |
+| `infer_borrowed_into` (borrowed input and buffer) | 21999 to 23087 ns | 16407 to 17330 ns | 39843 ns | 18102 ns |
 
-The owned form gains most because it was the form that allocated: about ten times on the glibc guest
-and two to four times on the Windows host, whose heap serves the same pattern more cheaply, and the
-Windows figures move between runs with the load of the host. The pooled forms land within a factor of
-two of each other on the glibc guest, which is what a request path bound by the engine rather than by
-the allocator looks like; the Windows host stays above them because each request still copies its
-output through that heap. The pools keep the blocks they served for as long as the network lives, so
-the retained set grows by the working set of one request and drops with the network.
+The guest values are the range of three runs and the Windows values the minimum of three runs on a
+host that other work was using, which moved its absolute numbers by up to twice between runs while
+the ratio held. The owned form gains most because it was the form that allocated: about ten times on
+the glibc guest and about two times on the Windows host, whose heap serves the same pattern more
+cheaply. The borrowed-buffer form gains a quarter on the guest and about half on the Windows host
+even though it allocates nothing on the caller side, because the pooled intermediates remove the
+engine's own per-request allocation. The pools keep the blocks they served for as long as the network
+lives, so the retained set grows by the working set of one request and drops with the network.
 
 `heap::retain_pages` addresses the other half: the pages of a buffer the caller allocates. A pooled
 network does not remove that buffer, and a network without pools still allocates its tensors, so the
@@ -156,20 +157,20 @@ of three rounds, on the WSL2 guest with 8 logical cores:
 
 | Configuration | requests/s | us per request |
 |---|---:|---:|
-| one network, every core | 40k to 42k | 24 to 25 |
-| one network per worker, 1 worker | 38k to 41k | 24 to 27 |
-| one network per worker, 2 workers | 71k to 80k | 25 to 28 |
-| one network per worker, 4 workers | 102k to 114k | 35 to 39 |
+| one network, every core | 41.7k | 24.0 |
+| one network per worker, 1 worker | 37.6k | 26.6 |
+| one network per worker, 2 workers | 77.5k | 25.8 |
+| one network per worker, 4 workers | 104.6k | 38.2 |
 
-The native thread pool and one worker on one thread reach the same per-request cost on a graph this
-small, where dispatch rather than arithmetic dominates; the pool neither wins nor loses. Independent
-workers then multiply the aggregate: four workers reach 2.5 to 2.9 times the single-worker
+The native thread pool and one worker on one thread reach nearly the same per-request cost on a graph
+this small, where dispatch rather than arithmetic dominates; the pool neither wins nor loses.
+Independent workers then multiply the aggregate: four workers reach 2.8 times the single-worker
 throughput at 1.4 times the latency, because they share the cores. A graph whose layers are heavy
 enough to amortize the dispatch cost moves the other way, so the choice is a measurement rather than
-a rule, and the example prints both forms for the graph an application uses. The Windows host shows
-the same ranking with a much wider spread, 11k to 47k requests per second across the configurations,
-because other work on that host moves the figures by several times; the table therefore reports the
-guest, whose three runs agree.
+a rule, and the example prints both forms for the graph an application uses. The 16-core Windows host
+showed the same ranking across three runs, 13k to 17k requests per second for one network over every
+core and 45k to 62k for four workers, with a much wider spread because other work was using it; the
+table therefore reports the guest, whose three runs agree.
 
 ## Allocator choice
 

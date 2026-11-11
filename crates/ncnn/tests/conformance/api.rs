@@ -92,7 +92,7 @@ fn reuse_net() -> Net {
 }
 
 #[test]
-fn reusing_an_extractor_restarts_the_request() {
+fn reusing_an_extractor_restarts_and_continues_requests() {
     fn run(extractor: &mut Extractor<'_>, value: f32) -> Vec<f32> {
         extractor
             .input("in", Mat::from_f32(&[value; 3], &[3]).unwrap())
@@ -105,44 +105,18 @@ fn reusing_an_extractor_restarts_the_request() {
     assert_eq!(run(&mut extractor, -1.), [-1., -1., -1.]);
     assert_eq!(run(&mut extractor, 5.), [10., 10., 10.]);
 
+    // A continuing input leaves the blobs in place, so the graph answers from them instead of
+    // recomputing; token-by-token decoding relies on that for its key/value cache. The input after
+    // it is a request boundary again.
+    extractor.continue_session();
+    assert_eq!(run(&mut extractor, 6.), [10., 10., 10.]);
+    assert_eq!(run(&mut extractor, 6.), [12., 12., 12.]);
+
     extractor.clear().unwrap();
     assert_eq!(run(&mut extractor, -1.), [-1., -1., -1.]);
 
     let mut fresh = net.extractor().unwrap();
     assert_eq!(run(&mut fresh, 5.), [10., 10., 10.]);
-}
-
-#[test]
-fn a_continuation_keeps_the_cached_state() {
-    let net = reuse_net();
-    let mut extractor = net.extractor().unwrap();
-    extractor
-        .input("in", Mat::from_f32(&[6.; 3], &[3]).unwrap())
-        .unwrap();
-    assert_eq!(
-        extractor.extract_owned("out").unwrap().values,
-        [12., 12., 12.]
-    );
-
-    // A continuing input leaves the blobs in place, so the graph answers from them instead of
-    // recomputing; token-by-token decoding relies on that for its key/value cache.
-    extractor.continue_session();
-    extractor
-        .input("in", Mat::from_f32(&[-2.; 3], &[3]).unwrap())
-        .unwrap();
-    assert_eq!(
-        extractor.extract_owned("out").unwrap().values,
-        [12., 12., 12.]
-    );
-
-    // The next input is a request boundary again.
-    extractor
-        .input("in", Mat::from_f32(&[-2.; 3], &[3]).unwrap())
-        .unwrap();
-    assert_eq!(
-        extractor.extract_owned("out").unwrap().values,
-        [-2., -2., -2.]
-    );
 }
 
 #[test]
@@ -301,25 +275,17 @@ fn tensor_views_alias_the_source() {
         extractor.extract_owned("out").unwrap().values,
         [0., 2., 4., 6.]
     );
-}
 
-#[test]
-fn tensor_views_feed_a_request_without_copying() {
-    // A linear graph, because light mode has to stay off for a borrowed input and the reuse graph
-    // reads its input from two layers.
-    let net = Net::builder()
+    // The borrowed form reads the region where it lives instead. A linear graph, because light mode
+    // has to stay off for a borrowed input and the reuse graph reads its input from two layers.
+    let linear = Net::builder()
         .unwrap()
         .threads(1)
         .unwrap()
         .load_bytes("7767517\n2 2\nInput in 0 1 in\nReLU relu 1 1 in out\n", &[])
         .unwrap();
-    let values: Vec<f32> = (0..8).map(|index| index as f32).collect();
-    let tensor = Mat::from_f32(&values, &[2, 2, 2]).unwrap();
     let mut buffer = Vec::new();
-
-    // The region reaches the layer where it lives: the second channel reads back as itself, and the
-    // source is untouched afterwards.
-    let ranges = net
+    let ranges = linear
         .infer_view_into(
             &[("in", &tensor.channel(1).unwrap())],
             &["out"],
@@ -331,7 +297,7 @@ fn tensor_views_feed_a_request_without_copying() {
 
     // A negative region clamps at zero, so the view really is what the layer read.
     let signed = Mat::from_f32(&[-1f32, 2., -3., 4.], &[2, 1, 2]).unwrap();
-    let ranges = net
+    let ranges = linear
         .infer_view_into(
             &[("in", &signed.channel(0).unwrap())],
             &["out"],
@@ -359,33 +325,63 @@ fn layer_handles_follow_the_loaded_graph() {
 }
 
 #[test]
-fn file_loading_matches_byte_loading() {
+fn models_load_from_files_and_readers() {
     let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let parameters = directory.join("api-file-loading.param");
-    let weights = directory.join("api-file-loading.bin");
+    let parameters = directory.join("api-loading.param");
+    let weights = directory.join("api-loading.bin");
     std::fs::write(&parameters, PARAM).unwrap();
     std::fs::write(&weights, []).unwrap();
 
-    let net = Net::builder()
+    fn run(net: &Net) {
+        let (input_a, input_b) = operands();
+        let mut extractor = net.extractor().unwrap();
+        extractor.input("a", input_a).unwrap();
+        extractor.input("b", input_b).unwrap();
+        assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
+    }
+
+    // Files through the native stdio loaders.
+    run(&Net::builder()
         .unwrap()
         .threads(1)
         .unwrap()
         .load_files(&parameters, &weights)
-        .unwrap();
-    let (input_a, input_b) = operands();
-    let mut extractor = net.extractor().unwrap();
-    extractor.input("a", input_a).unwrap();
-    extractor.input("b", input_b).unwrap();
-    assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
+        .unwrap());
+
+    // Reader over memory.
+    let text = DataReader::from_bytes(PARAM.as_bytes()).unwrap();
+    let empty = DataReader::from_bytes(&[]).unwrap();
+    let mut net = Net::new().unwrap();
+    net.load_param_reader(&text).unwrap();
+    net.load_model_reader(&empty).unwrap();
+    run(&net);
+
+    // Reader over a file, which stays open until the handle drops.
+    let file = DataReader::from_file(&parameters).unwrap();
+    let mut net = Net::new().unwrap();
+    net.load_param_reader(&file).unwrap();
+    net.load_model_reader(&empty).unwrap();
+    run(&net);
+    drop(file);
+
+    // A reader over a caller cursor takes the same path.
+    let cursor = DataReader::from_reader(Cursor::new(PARAM.as_bytes().to_vec())).unwrap();
+    assert!(!cursor.as_raw().is_null());
+
+    // Failures are reported in order: parameters first, then weights.
+    let mut broken = Net::new().unwrap();
+    assert!(broken.load_param_reader(&empty).is_err());
+    assert!(
+        broken.load_model_reader(&empty).is_err(),
+        "weights need parameters first"
+    );
+    assert!(
+        DataReader::from_file(directory.join("api-loading-missing.param")).is_err(),
+        "a missing file is reported"
+    );
 
     std::fs::remove_file(&parameters).unwrap();
     std::fs::remove_file(&weights).unwrap();
-}
-
-#[test]
-fn data_reader_accepts_any_read() {
-    let reader = DataReader::from_reader(Cursor::new(b"payload")).unwrap();
-    assert!(!reader.as_raw().is_null());
 }
 
 #[test]
@@ -638,6 +634,39 @@ fn borders_run_on_the_native_padding_and_crop_kernels() {
         .flat_map(|row| [1usize, 2].map(|column| values[row * 4 + column]))
         .collect();
     assert_eq!(interior, [1., 2., 3., 4.], "the mirror keeps the source");
+
+    // The depth variant pads and crops the fourth axis, and rejects a tensor without it.
+    let volume: Vec<f32> = (0..8).map(|value| value as f32).collect();
+    let tensor = Mat::from_f32(&volume, &[2, 2, 2, 1]).unwrap();
+    assert_eq!(tensor.info().dims, 4);
+    let depth = ncnn_rust::Borders::new(1, 0, 0, 1).with_depth(1, 0);
+    let padded = tensor
+        .copy_make_border_3d(depth, ncnn_rust::BorderMode::Constant, -1.)
+        .unwrap();
+    assert_eq!(
+        (
+            padded.info().w,
+            padded.info().h,
+            padded.info().d,
+            padded.info().c
+        ),
+        (3, 3, 3, 1)
+    );
+    let cropped = padded.copy_cut_border_3d(depth).unwrap();
+    assert_eq!(cropped.to_f32().unwrap(), volume);
+    assert!(
+        cropped
+            .copy_cut_border_3d(ncnn_rust::Borders::new(0, 0, 0, 2))
+            .is_err(),
+        "the crop keeps one column"
+    );
+    assert!(
+        Mat::from_f32(&volume, &[2, 2, 2])
+            .unwrap()
+            .copy_cut_border_3d(ncnn_rust::Borders::default())
+            .is_err(),
+        "the depth variant needs four axes"
+    );
 }
 
 #[test]
@@ -828,28 +857,6 @@ fn graph_description_matches_the_parameter_text() {
 }
 
 #[test]
-fn readers_load_parameters_and_weights() {
-    let reader = DataReader::from_bytes(PARAM.as_bytes()).unwrap();
-    let mut net = Net::new().unwrap();
-    net.load_param_reader(&reader).unwrap();
-    let weights = DataReader::from_bytes(&[]).unwrap();
-    net.load_model_reader(&weights).unwrap();
-    let (input_a, input_b) = operands();
-    let mut extractor = net.extractor().unwrap();
-    extractor.input("a", input_a).unwrap();
-    extractor.input("b", input_b).unwrap();
-    assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
-
-    let mut second = Net::new().unwrap();
-    let empty = DataReader::from_bytes(b"").unwrap();
-    assert!(second.load_param_reader(&empty).is_err());
-    assert!(
-        second.load_model_reader(&weights).is_err(),
-        "weights need parameters first"
-    );
-}
-
-#[test]
 fn type_index_registration_rejects_incomplete_factories() {
     let mut net = Net::new().unwrap();
     let error =
@@ -952,66 +959,6 @@ fn flatten_and_packing_rewrite_the_layout() {
         "the packing has to divide the axis"
     );
     assert!(tensor.with_packing(0).is_err());
-}
-
-#[test]
-fn depth_borders_cover_the_fourth_axis() {
-    let values: Vec<f32> = (0..8).map(|value| value as f32).collect();
-    let tensor = Mat::from_f32(&values, &[2, 2, 2, 1]).unwrap();
-    assert_eq!(tensor.info().dims, 4);
-    let border = ncnn_rust::Borders::new(1, 0, 0, 1).with_depth(1, 0);
-    let padded = tensor
-        .copy_make_border_3d(border, ncnn_rust::BorderMode::Constant, -1.)
-        .unwrap();
-    assert_eq!(
-        (
-            padded.info().w,
-            padded.info().h,
-            padded.info().d,
-            padded.info().c
-        ),
-        (3, 3, 3, 1)
-    );
-    let cropped = padded.copy_cut_border_3d(border).unwrap();
-    assert_eq!(cropped.to_f32().unwrap(), values);
-    assert!(
-        cropped
-            .copy_cut_border_3d(ncnn_rust::Borders::new(0, 0, 0, 2))
-            .is_err(),
-        "the crop keeps one column"
-    );
-    assert!(
-        Mat::from_f32(&values, &[2, 2, 2])
-            .unwrap()
-            .copy_cut_border_3d(ncnn_rust::Borders::default())
-            .is_err(),
-        "the depth variant needs four axes"
-    );
-}
-
-#[test]
-fn readers_open_files_and_load_through_them() {
-    let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let parameters = directory.join("api-reader-file.param");
-    std::fs::write(&parameters, PARAM).unwrap();
-
-    let reader = DataReader::from_file(&parameters).unwrap();
-    let mut net = Net::new().unwrap();
-    net.load_param_reader(&reader).unwrap();
-    let weights = DataReader::from_bytes(&[]).unwrap();
-    net.load_model_reader(&weights).unwrap();
-    let (input_a, input_b) = operands();
-    let mut extractor = net.extractor().unwrap();
-    extractor.input("a", input_a).unwrap();
-    extractor.input("b", input_b).unwrap();
-    assert_eq!(extractor.extract_owned("sum").unwrap().values, [5., 7., 9.]);
-    assert!(
-        DataReader::from_file(directory.join("api-reader-file-missing.param")).is_err(),
-        "a missing file is reported"
-    );
-    // The reader keeps the file open, so the handle has to drop before the file can go.
-    drop(reader);
-    std::fs::remove_file(&parameters).unwrap();
 }
 
 #[test]
