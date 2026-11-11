@@ -837,6 +837,8 @@ impl Net {
                 "Load parameters and weights before extraction",
             ));
         }
+        // Read the option before the handle exists, so a failed read leaves nothing to release.
+        let net_light_mode = self.option(crate::CpuOption::LightMode)? != 0;
         let raw = unsafe { sys::ncnn_extractor_create(self.raw) };
         if raw.is_null() {
             return Err(Error::Native(-100));
@@ -849,7 +851,7 @@ impl Net {
             extracted: Cell::new(false),
             continuation: Cell::new(false),
             light_mode: None,
-            net_light_mode: self.option(crate::CpuOption::LightMode)? != 0,
+            net_light_mode,
             blob_allocator: None,
             workspace_allocator: None,
             kvcache_allocator: None,
