@@ -1,5 +1,6 @@
 use ncnn::{CpuOption, Mat, Net};
 use ncnn_rust as ncnn;
+use ncnn_rust::{Input, TensorWidth};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::atomic::{AtomicUsize, Ordering},
@@ -32,8 +33,11 @@ fn request(
 ) -> ncnn::Result<f32> {
     // Borrowed input and reused output: the fused zero-copy request path.
     if mode == "borrowed-reused" {
-        let ranges =
-            net.infer_borrowed_into(&[("input", values, &[values.len()])], &["output"], reusable)?;
+        let ranges = net.infer_into(
+            [("input", Input::borrowed(values, &[values.len()]))],
+            &["output"],
+            reusable,
+        )?;
         let slice = &reusable[ranges[0].values.clone()];
         return Ok(black_box(slice[0] + slice[slice.len() - 1]));
     }
@@ -53,26 +57,26 @@ fn request(
     }
     if mode == "resolved-reused" {
         reusable.clear();
-        ex.extract_append(output_id, reusable)?;
+        ex.extract_into(output_id, reusable)?;
         return Ok(black_box(reusable[0] + reusable[reusable.len() - 1]));
     }
     if mode == "owned-guard" {
-        let output = ex.extract("output")?;
+        let output = ex.extract("output", TensorWidth::Fp32)?;
         let values = output.as_f32_slice()?;
         return Ok(black_box(values[0] + values[values.len() - 1]));
     }
     if mode == "guard-into" {
-        let output = ex.extract("output")?.into_mat()?;
+        let output = ex.extract("output", TensorWidth::Fp32)?.into_mat()?;
         let values = output.as_f32_slice()?;
         return Ok(black_box(values[0] + values[values.len() - 1]));
     }
     if mode == "owned-mat" {
-        let output = ex.extract_mat("output")?;
+        let output = ex.extract_mat("output", TensorWidth::Fp32)?;
         let values = output.as_f32_slice()?;
         return Ok(black_box(values[0] + values[values.len() - 1]));
     }
     if mode == "guard-detach" {
-        let output = ex.extract("output")?.detach()?;
+        let output = ex.extract("output", TensorWidth::Fp32)?.detach()?;
         let values = output.as_f32_slice()?;
         return Ok(black_box(values[0] + values[values.len() - 1]));
     }
@@ -252,13 +256,13 @@ fn request_form(
     if form == "guard" {
         let mut extractor = net.extractor()?;
         extractor.input("input", Mat::from_f32(values, &[values.len()])?)?;
-        let output = extractor.extract("output")?;
+        let output = extractor.extract("output", TensorWidth::Fp32)?;
         return Ok(checksum(output.as_f32_slice()?));
     }
     if form == "extract-mat" {
         let mut extractor = net.extractor()?;
         extractor.input("input", Mat::from_f32(values, &[values.len()])?)?;
-        let output = extractor.extract_mat("output")?;
+        let output = extractor.extract_mat("output", TensorWidth::Fp32)?;
         return Ok(checksum(output.as_f32_slice()?));
     }
     if form == "extract-owned" {
@@ -276,8 +280,8 @@ fn request_form(
         )?;
         return Ok(checksum(&target[ranges[0].values.clone()]));
     }
-    let ranges = net.infer_borrowed_into(
-        &[("input", values, &[values.len()])],
+    let ranges = net.infer_into(
+        [("input", Input::borrowed(values, &[values.len()]))],
         &["output"],
         &mut target,
     )?;

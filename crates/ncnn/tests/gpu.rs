@@ -7,6 +7,7 @@
 //! Vulkan device skips every case.
 
 use ncnn_rust::gpu::Device;
+use ncnn_rust::TensorWidth;
 use ncnn_rust::{Endpoint, Mat, Net};
 
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
@@ -98,7 +99,7 @@ fn stored_bytes(net: &Net, label: &str) -> Vec<i8> {
         .input(Endpoint::Name("input"), conv_input())
         .expect("input");
     let guard = extractor
-        .extract_stored(Endpoint::Name("output"))
+        .extract(Endpoint::Name("output"), TensorWidth::Stored)
         .expect("stored output");
     assert_eq!(guard.info().elemsize, 1, "{label} storage width");
     guard.to_i8().expect("stored bytes")
@@ -280,7 +281,7 @@ fn vulkan_surface_contracts() {
             .input(Endpoint::Name("input"), conv_input())
             .expect("device input");
         let guard = extractor
-            .extract_stored(Endpoint::Name("stored"))
+            .extract(Endpoint::Name("stored"), TensorWidth::Stored)
             .expect("device stored output");
         assert_eq!(guard.info().elemsize, 1, "device storage width");
         guard.to_i8().expect("device stored bytes")
@@ -292,7 +293,7 @@ fn vulkan_surface_contracts() {
             .input(Endpoint::Name("input"), conv_input())
             .expect("host input");
         let guard = extractor
-            .extract_stored(Endpoint::Name("stored"))
+            .extract(Endpoint::Name("stored"), TensorWidth::Stored)
             .expect("host stored output");
         guard.to_i8().expect("host stored bytes")
     };

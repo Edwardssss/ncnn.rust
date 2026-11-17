@@ -890,7 +890,7 @@ impl Mat {
     /// `data` must stay alive, keep its length and stay free of mutable aliases until this tensor
     /// and every native object that received it are dropped. An extractor that submitted it holds
     /// the pointer until it is dropped, so the borrow has to cover the extraction. Use
-    /// [`Net::infer_borrowed`](crate::Net::infer_borrowed) when the borrow only has to cover one
+    /// [`Input::borrowed`](crate::Input::borrowed) when the borrow only has to cover one
     /// request.
     pub unsafe fn from_external(data: &[f32], dimensions: &[usize]) -> Result<Self> {
         let (s, count) = shape(dimensions)?;
@@ -1252,7 +1252,7 @@ impl MatView<'_> {
     ///
     /// The tensor keeps no storage of its own, so it cannot be transferred into an extractor, and
     /// submitting it through [`Extractor::input`](crate::Extractor::input) copies. The borrowed
-    /// form accepts it without a copy: [`Net::infer_view_into`](crate::Net::infer_view_into) bounds
+    /// form accepts it without a copy: [`Input::view`](crate::Input::view) bounds
     /// the borrow to one request, and
     /// [`Extractor::input_borrowed`](crate::Extractor::input_borrowed) carries the lifetime rules
     /// of every other borrowed input, which requires light mode off.

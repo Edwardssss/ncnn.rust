@@ -1,46 +1,6 @@
 use crate::{sys, Error, Mat, Result};
 use std::{marker::PhantomData, rc::Rc};
 
-/// Owns a native pool allocator and releases it after its allocations.
-pub struct PoolAllocator {
-    raw: sys::ncnn_allocator_t,
-    _thread: PhantomData<Rc<()>>,
-}
-impl PoolAllocator {
-    /// Creates a pool allocator with native defaults.
-    pub fn new() -> Result<Self> {
-        let raw = unsafe { sys::ncnn_allocator_create_pool_allocator() };
-        if raw.is_null() {
-            return Err(Error::Native(-100));
-        }
-        Ok(Self {
-            raw,
-            _thread: PhantomData,
-        })
-    }
-    /// Sets the native reuse ratio and size threshold.
-    pub fn configure(&mut self, ratio: f32, threshold: usize) -> Result<()> {
-        unsafe { crate::error::status(sys::ncnn_rs_pool_configure(self.raw, 0, ratio, threshold)) }
-    }
-    /// Releases every cached block that has no outstanding allocation.
-    pub fn clear(&mut self) {
-        unsafe {
-            sys::ncnn_rs_pool_clear(self.raw, 0);
-        }
-    }
-    /// Borrows the allocator for advanced FFI allocation paths.
-    pub fn as_raw(&self) -> sys::ncnn_allocator_t {
-        self.raw
-    }
-}
-impl Drop for PoolAllocator {
-    fn drop(&mut self) {
-        unsafe {
-            sys::ncnn_allocator_destroy(self.raw);
-        }
-    }
-}
-
 /// Storage form of one parameter dictionary entry.
 ///
 /// The variant follows the native type code, which decides the getter a layer uses. A binary

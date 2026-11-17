@@ -2,7 +2,9 @@
 //! readers, parameter dictionaries, unchecked tensor reads, reshape views, the three
 //! endpoint forms and concatenated outputs.
 
-use ncnn_rust::{DataReader, Endpoint, Extractor, Mat, Net, ParamDict, PoolAllocator};
+use ncnn_rust::alloc::Pool;
+use ncnn_rust::{DataReader, Endpoint, Extractor, Mat, Net, ParamDict};
+use ncnn_rust::{Input, TensorWidth};
 use std::io::Cursor;
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
 
@@ -52,8 +54,11 @@ fn pooled_networks_reuse_intermediate_memory() {
         let left = vec![4f32, 5., 6.];
         let right = vec![1f32, 2., 3.];
         let ranges = pooled
-            .infer_borrowed_into(
-                &[("a", &left, &[3]), ("b", &right, &[3])],
+            .infer_into(
+                [
+                    ("a", Input::borrowed(&left, &[3])),
+                    ("b", Input::borrowed(&right, &[3])),
+                ],
                 &["sum"],
                 &mut buffer,
             )
@@ -151,10 +156,10 @@ fn extractor_settings_override_the_network() {
     assert!(unsafe { extractor.input_borrowed("in", &borrowed) }.is_err());
 
     // Per-request pools serve the same request, and they survive the restart a second input causes.
-    let mut blobs = PoolAllocator::new().unwrap();
+    let mut blobs = Pool::new().unwrap();
     blobs.configure(0.5, 1024).unwrap();
-    let workspace = PoolAllocator::new().unwrap();
-    let kvcache = PoolAllocator::new().unwrap();
+    let workspace = Pool::new().unwrap();
+    let kvcache = Pool::new().unwrap();
     let mut pooled = net.extractor().unwrap();
     unsafe { pooled.set_blob_allocator(&blobs) };
     unsafe { pooled.set_workspace_allocator(&workspace) };
@@ -286,8 +291,8 @@ fn tensor_views_alias_the_source() {
         .unwrap();
     let mut buffer = Vec::new();
     let ranges = linear
-        .infer_view_into(
-            &[("in", &tensor.channel(1).unwrap())],
+        .infer_into(
+            [("in", Input::view(&tensor.channel(1).unwrap()))],
             &["out"],
             &mut buffer,
         )
@@ -298,8 +303,8 @@ fn tensor_views_alias_the_source() {
     // A negative region clamps at zero, so the view really is what the layer read.
     let signed = Mat::from_f32(&[-1f32, 2., -3., 4.], &[2, 1, 2]).unwrap();
     let ranges = linear
-        .infer_view_into(
-            &[("in", &signed.channel(0).unwrap())],
+        .infer_into(
+            [("in", Input::view(&signed.channel(0).unwrap()))],
             &["out"],
             &mut buffer,
         )
@@ -684,14 +689,14 @@ fn owned_extraction_keeps_the_detached_buffer() {
     extractor
         .input("input", Mat::from_f32(&[1.0f32, -2.0], &[2]).unwrap())
         .unwrap();
-    let first = extractor.extract_mat("output").unwrap();
+    let first = extractor.extract_mat("output", TensorWidth::Fp32).unwrap();
     assert_eq!(first.to_f32().unwrap(), [1., 0.]);
 
     // A later request reuses the extractor's storage; the owned tensor must not follow it.
     extractor
         .input("input", Mat::from_f32(&[-3.0f32, 4.0], &[2]).unwrap())
         .unwrap();
-    let second = extractor.extract_mat("output").unwrap();
+    let second = extractor.extract_mat("output", TensorWidth::Fp32).unwrap();
     assert_eq!(second.to_f32().unwrap(), [0., 4.]);
     assert_eq!(
         first.to_f32().unwrap(),
@@ -703,13 +708,21 @@ fn owned_extraction_keeps_the_detached_buffer() {
     extractor
         .input("input", Mat::from_f32(&[5.0f32, -6.0], &[2]).unwrap())
         .unwrap();
-    let third = extractor.extract("output").unwrap().into_mat().unwrap();
+    let third = extractor
+        .extract("output", TensorWidth::Fp32)
+        .unwrap()
+        .into_mat()
+        .unwrap();
     assert_eq!(third.to_f32().unwrap(), [5., 0.]);
     extractor
         .input("input", Mat::from_f32(&[7.0f32, 8.0], &[2]).unwrap())
         .unwrap();
     assert_eq!(
-        extractor.extract_mat("output").unwrap().to_f32().unwrap(),
+        extractor
+            .extract_mat("output", TensorWidth::Fp32)
+            .unwrap()
+            .to_f32()
+            .unwrap(),
         [7., 8.]
     );
 
@@ -730,11 +743,11 @@ fn owned_extraction_keeps_the_detached_buffer() {
     extractor
         .input("input", Mat::from_f32(&[1.0f32, -2.0], &[2]).unwrap())
         .unwrap();
-    let kept = extractor.extract_mat("output").unwrap();
+    let kept = extractor.extract_mat("output", TensorWidth::Fp32).unwrap();
     extractor
         .input("input", Mat::from_f32(&[-3.0f32, 4.0], &[2]).unwrap())
         .unwrap();
-    extractor.extract_mat("output").unwrap();
+    extractor.extract_mat("output", TensorWidth::Fp32).unwrap();
     assert_eq!(kept.to_f32().unwrap(), [1., 0.]);
 }
 
@@ -751,7 +764,7 @@ fn borrowed_inputs_run_without_copying() {
         .unwrap();
     let values = [-1.0f32, 2.0, -3.0, 4.0];
     let outputs = net
-        .infer_borrowed(&[("input", &values, &[4])], &["output"])
+        .infer([("input", Input::borrowed(&values, &[4]))], &["output"])
         .unwrap();
     assert_eq!(outputs[0].values, [0., 2., 0., 4.]);
 
@@ -778,23 +791,35 @@ fn borrowed_inputs_run_without_copying() {
     // steady-state loop allocates on neither side.
     let mut buffer = Vec::new();
     let ranges = net
-        .infer_borrowed_into(&[("input", &values, &[4])], &["output"], &mut buffer)
+        .infer_into(
+            [("input", Input::borrowed(&values, &[4]))],
+            &["output"],
+            &mut buffer,
+        )
         .unwrap();
     assert_eq!(ranges.len(), 1);
     assert_eq!(ranges[0].name, "output");
     assert_eq!(ranges[0].info.w, 4);
     assert_eq!(&buffer[ranges[0].values.clone()], [0., 2., 0., 4.]);
     let capacity = buffer.capacity();
-    net.infer_borrowed_into(&[("input", &values, &[4])], &["output"], &mut buffer)
-        .unwrap();
+    net.infer_into(
+        [("input", Input::borrowed(&values, &[4]))],
+        &["output"],
+        &mut buffer,
+    )
+    .unwrap();
     assert_eq!(
         buffer.capacity(),
         capacity,
         "the buffer keeps its allocation across requests"
     );
     assert!(
-        net.infer_borrowed_into(&[("input", &values, &[3])], &["output"], &mut buffer)
-            .is_err(),
+        net.infer_into(
+            [("input", Input::borrowed(&values, &[3]))],
+            &["output"],
+            &mut buffer
+        )
+        .is_err(),
         "the shape must match the slice"
     );
 
@@ -813,7 +838,7 @@ fn borrowed_inputs_run_without_copying() {
         .unwrap();
     assert!(
         light
-            .infer_borrowed(&[("input", &values, &[4])], &["output"])
+            .infer([("input", Input::borrowed(&values, &[4]))], &["output"])
             .is_err(),
         "light mode rejects a borrowed input"
     );
@@ -1033,9 +1058,9 @@ fn flatten_and_packing_rewrite_the_layout() {
 #[test]
 fn allocator_options_attach_pools() {
     let mut options = ncnn_rust::Options::new().unwrap();
-    let blobs = ncnn_rust::PoolAllocator::new().unwrap();
-    let workspace = ncnn_rust::PoolAllocator::new().unwrap();
-    let cache = ncnn_rust::PoolAllocator::new().unwrap();
+    let blobs = ncnn_rust::alloc::Pool::new().unwrap();
+    let workspace = ncnn_rust::alloc::Pool::new().unwrap();
+    let cache = ncnn_rust::alloc::Pool::new().unwrap();
     unsafe {
         options.set_blob_allocator(&blobs).unwrap();
         options.set_workspace_allocator(&workspace).unwrap();

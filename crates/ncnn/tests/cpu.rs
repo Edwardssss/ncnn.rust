@@ -1,8 +1,9 @@
 use ncnn_rust as ncnn;
+use ncnn_rust::TensorWidth;
 mod advanced;
 
 use ncnn::{
-    sys, CpuOption, Layer, Mat, ModelBin, Net, Options, ParamDict, PixelFormat, PoolAllocator,
+    alloc::Pool, sys, CpuOption, Layer, Mat, ModelBin, Net, Options, ParamDict, PixelFormat,
 };
 
 const GRAPH: &str = "7767517\n4 4\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\nBinaryOp product 2 1 a b product 0=2\n";
@@ -121,10 +122,10 @@ fn vulkan_contracts() -> ncnn::Result<()> {
             let mut ex = net.extractor()?;
             ex.input("a", a.deep_clone()?)?;
             ex.input("b", b.deep_clone()?)?;
-            assert!(ex.extract("sum").is_err());
+            assert!(ex.extract("sum", TensorWidth::Fp32).is_err());
             let mut copied = Vec::with_capacity(16);
             ex.extract_into("sum", &mut copied)?;
-            ex.extract_append("product", &mut copied)?;
+            ex.extract_into("product", &mut copied)?;
             assert_eq!(copied, [3., 5., 7., 9., 2., 6., 12., 20.]);
             assert!(ex.extract_into(-1, &mut copied).is_err());
             let sum = ex.extract_owned("sum")?;
@@ -360,7 +361,8 @@ fn cpu_contracts() -> ncnn::Result<()> {
         ex.extract_into("product", &mut outputs)?;
     }
     drop(net);
-    assert_eq!(outputs, [2., 6., 12., 20.]);
+    // `extract_into` appends, so the product follows the prefix the failed request left behind.
+    assert_eq!(outputs, [3., 5., 7., 9., 2., 6., 12., 20.]);
     for _ in 0..8 {
         let detached = {
             let mut net = Net::new()?;
@@ -390,7 +392,7 @@ fn cpu_contracts() -> ncnn::Result<()> {
     let mut net = Net::new()?;
     assert!(net.load_param_binary(&[]).is_err());
     assert!(net.extractor().is_err());
-    let pool = PoolAllocator::new()?;
+    let pool = Pool::new()?;
     assert!(!pool.as_raw().is_null());
     let mut pd = ParamDict::new()?;
     pd.set_float(0, 0.)?;
@@ -485,7 +487,7 @@ fn cpu_contracts() -> ncnn::Result<()> {
         custom.load_model(&[])?;
         let mut ex = custom.extractor()?;
         ex.input("input", a.deep_clone()?)?;
-        assert!(ex.extract("output").is_err());
+        assert!(ex.extract("output", TensorWidth::Fp32).is_err());
         assert_eq!(ex.extract_owned("output")?.values, a.to_f32()?);
     }
     assert_eq!(destroyed.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -548,7 +550,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
                 let pointer = input.channel_f32(0)?.as_ptr();
                 ex.input("input", input)?;
                 {
-                    let view = ex.extract(0)?;
+                    let view = ex.extract(0, TensorWidth::Fp32)?;
                     assert_eq!(view.channel_f32(0)?.as_ptr(), pointer);
                     assert_eq!(view.channel_f32(1)?, [-4., 5.]);
                     assert!(view.as_f32_slice().is_err());
@@ -556,18 +558,21 @@ fn low_copy_outputs() -> ncnn::Result<()> {
                     assert_eq!(view.info().elempack, 1);
                 }
                 ex.input("input", Mat::from_f32(&values, &[1, 2, 16])?)?;
-                let input_copy = ex.extract("input")?.detach()?;
-                assert!(ex.extract("missing").is_err());
-                assert!(ex.extract("invalid\0name").is_err());
+                let input_copy = ex.extract("input", TensorWidth::Fp32)?.detach()?;
+                assert!(ex.extract("missing", TensorWidth::Fp32).is_err());
+                assert!(ex.extract("invalid\0name", TensorWidth::Fp32).is_err());
                 assert!(ex.extract_owned(-1).is_err());
                 assert!(ex.extract_owned(i32::MAX).is_err());
                 for _ in 0..3 {
-                    let view = ex.extract("positive")?;
+                    let view = ex.extract("positive", TensorWidth::Fp32)?;
                     assert_eq!(view.to_f32()?, positive);
                 }
-                assert_eq!(ex.extract("absolute")?.to_f32()?, absolute);
+                assert_eq!(
+                    ex.extract("absolute", TensorWidth::Fp32)?.to_f32()?,
+                    absolute
+                );
                 {
-                    let view = ex.extract("positive")?;
+                    let view = ex.extract("positive", TensorWidth::Fp32)?;
                     let channel = view.channel_f32(0)?;
                     assert!(net.extractor().is_err());
                     assert_eq!(channel, &positive[..2]);
@@ -575,10 +580,10 @@ fn low_copy_outputs() -> ncnn::Result<()> {
                 }
                 {
                     let other = net.extractor()?;
-                    assert!(ex.extract("positive").is_err());
+                    assert!(ex.extract("positive", TensorWidth::Fp32).is_err());
                     drop(other);
                 }
-                let detached = ex.extract("positive")?.detach()?;
+                let detached = ex.extract("positive", TensorWidth::Fp32)?.detach()?;
                 let absolute_copy = ex.extract_owned("absolute")?;
                 drop(ex);
                 drop(net);
@@ -599,13 +604,13 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     };
     ex.input("input", adopted)?;
     {
-        let view = ex.extract("input")?;
+        let view = ex.extract("input", TensorWidth::Fp32)?;
         assert_ne!(view.as_f32_slice()?.as_ptr(), external.as_ptr());
         external.fill(99.);
         assert_eq!(view.as_f32_slice()?, [1., -2., 3., -4.]);
     }
     unsafe { ex.as_raw() };
-    assert!(ex.extract("positive").is_err());
+    assert!(ex.extract("positive", TensorWidth::Fp32).is_err());
     assert_eq!(ex.extract_owned("positive")?.values, [1., 0., 3., 0.]);
     drop(ex);
     {
@@ -621,7 +626,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
             Mat::from_raw_owned(raw, true)?
         };
         batched.input("input", input)?;
-        let view = batched.extract("input")?;
+        let view = batched.extract("input", TensorWidth::Fp32)?;
         assert_eq!(view.info().n, 2);
         assert!(view.as_f32_slice().is_err());
         assert!(view.channel_f32(0).is_err());
@@ -630,13 +635,13 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     let mut ex = net.extractor()?;
     unsafe { net.as_raw() };
     assert!(matches!(
-        ex.extract("positive"),
+        ex.extract("positive", TensorWidth::Fp32),
         Err(ncnn::Error::Invalid(_))
     ));
     let forgotten = Net::builder()?.threads(1)?.load_bytes(graph, &[])?;
     let mut cached = forgotten.extractor()?;
     cached.input("input", Mat::from_f32(&[-1., 2.], &[2])?)?;
-    std::mem::forget(cached.extract("input")?);
+    std::mem::forget(cached.extract("input", TensorWidth::Fp32)?);
     assert!(forgotten.extractor().is_err());
     assert!(cached
         .input("input", Mat::from_f32(&[3., 4.], &[2])?)
@@ -652,7 +657,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     let forgotten_extractor = Net::builder()?.threads(1)?.load_bytes(graph, &[])?;
     std::mem::forget(forgotten_extractor.extractor()?);
     let mut peer = forgotten_extractor.extractor()?;
-    assert!(peer.extract("input").is_err());
+    assert!(peer.extract("input", TensorWidth::Fp32).is_err());
     let mut native = Net::new()?;
     native.load_param(graph)?;
     let _ =
@@ -660,11 +665,11 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     native.load_param(graph)?;
     native.load_model(&[])?;
     assert!(matches!(
-        native.extractor()?.extract("input"),
+        native.extractor()?.extract("input", TensorWidth::Fp32),
         Err(ncnn::Error::Invalid(_))
     ));
     let options = Options::new()?;
-    let pool = PoolAllocator::new()?;
+    let pool = Pool::new()?;
     unsafe {
         sys::ncnn_option_set_blob_allocator(options.as_raw(), pool.as_raw());
     }
@@ -674,7 +679,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     net.load_model(&[])?;
     let mut ex = net.extractor()?;
     ex.input("input", Mat::from_f32(&[-1., 2.], &[2])?)?;
-    assert!(ex.extract(0).is_err());
+    assert!(ex.extract(0, TensorWidth::Fp32).is_err());
     assert_eq!(ex.extract_owned("positive")?.values, [0., 2.]);
     drop(ex);
     drop(net);
@@ -717,11 +722,17 @@ fn ergonomic_paths() -> ncnn::Result<()> {
         })
         .is_err());
     assert_eq!(calls, 1);
-    assert_eq!(sequential.extract("product")?.to_f32()?, seen[1].1);
+    assert_eq!(
+        sequential.extract("product", TensorWidth::Fp32)?.to_f32()?,
+        seen[1].1
+    );
     assert!(sequential
         .inputs([("a", a.deep_clone()?), ("bad\0name", b.deep_clone()?)])
         .is_err());
-    assert_eq!(sequential.extract("a")?.to_f32()?, a.to_f32()?);
+    assert_eq!(
+        sequential.extract("a", TensorWidth::Fp32)?.to_f32()?,
+        a.to_f32()?
+    );
     let dense = a.as_f32_slice()?;
     assert_eq!(dense.as_ptr(), unsafe {
         sys::ncnn_mat_get_data(a.as_raw()).cast::<f32>()
@@ -1012,7 +1023,7 @@ fn resolved_endpoints_are_bound_to_the_loaded_graph() -> ncnn::Result<()> {
         let mut ex = net.extractor()?;
         assert!(ex.input(&output, Mat::from_f32(&[1.], &[1])?).is_err());
         assert!(ex.extract_into(&input, &mut Vec::new()).is_err());
-        assert!(ex.extract(&input).is_err());
+        assert!(ex.extract(&input, TensorWidth::Fp32).is_err());
     }
     {
         let mut ex = net.extractor()?;
@@ -1021,10 +1032,10 @@ fn resolved_endpoints_are_bound_to_the_loaded_graph() -> ncnn::Result<()> {
         let mut values = Vec::new();
         ex.extract_into(&output, &mut values)?;
         assert_eq!(values, [5.]);
-        ex.extract_append(&output, &mut values)?;
-        ex.extract_append(output.index(), &mut values)?;
+        ex.extract_into(&output, &mut values)?;
+        ex.extract_into(output.index(), &mut values)?;
         assert_eq!(values, [5., 5., 5.]);
-        assert!(ex.extract_append(-1, &mut values).is_err());
+        assert!(ex.extract_into(-1, &mut values).is_err());
         assert_eq!(values, [5., 5., 5.]);
     }
     net.clear();

@@ -44,5 +44,8 @@ fn request(
     extractor
         .input(input_id, Mat::from_f32(values, shape).expect("input"))
         .expect("submit");
+    // `extract_into` appends, so the replace semantics this gate measures clear first; the
+    // capacity survives the clear, which is what keeps the steady state allocation-free.
+    buffer.clear();
     extractor.extract_into(output_id, buffer).expect("extract");
 }

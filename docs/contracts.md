@@ -65,9 +65,9 @@ The pinned native ownership audit covers these alias paths:
 - Light mode releases cached intermediates and checks shared refcounts before in-place forwarding. Guard creation requires the network's only live extractor. A network-wide reservation blocks safe input, extraction and new extractors until guard destruction; this also covers model-owned aliases and allocator state beyond the current cache. Existing peers cause guard creation to fail, and dropping peers permits recovery. Forgetting an extractor conservatively prevents subsequent guards; forgetting a guard leaks its handle and permanently reserves the network. Neither case permits native reuse through safe inference APIs.
 - The guard's lifetime comes from `&mut Extractor`, and that extractor holds `&Net`; its private owned `Mat` releases the handle before either resource can die. The phantom borrow records this reservation without storing a second reference. An explicit guard destructor makes Rust drop checking retain that borrow through implicit handle destruction, even when the guard is otherwise unused. Safe methods expose neither the tensor nor its raw handle, and all slice lifetimes come from the guard. Advanced raw writers must preserve these borrows even if a raw input pointer was obtained before `input`.
 
-`inputs` applies the same storage-provenance check as `input` to each input in order. `outputs_with` scopes one guard per callback and releases it before the next extraction. A callback can retain copied values while its borrowed slices remain scoped to that callback. Errors stop iteration; earlier input transfers and callback effects remain applied. Final-vector output methods retain independent Rust storage; `extract_mat`, `extract_stored_owned` and `OutputGuard::into_mat` retain independent native storage without a second copy.
+`inputs` applies the same storage-provenance check as `input` to each input in order. `outputs_with` scopes one guard per callback and releases it before the next extraction. A callback can retain copied values while its borrowed slices remain scoped to that callback. Errors stop iteration; earlier input transfers and callback effects remain applied. Final-vector output methods retain independent Rust storage; `extract_mat` with either `TensorWidth` and `OutputGuard::into_mat` retain independent native storage without a second copy.
 
-Low-copy describes omission of the wrapper's final deep clone. A null native allocator or different data pointer does not prove output independence. Native extraction shallow-assigns cached tensors, including input-blob aliases; consuming a Rust input does not remove those native references. Final vectors copy logical values instead of certifying output independence from allocator identity. The installed 20261020 `Extractor::extract` performs type-0 unpacking, supported precision conversions, and a deep clone whenever the result comes from the network's own local blob pool, which is the default: that clone detaches the tensor from the pool so it can outlive the network, and it is the only copy the owned forms pay. The wrapper takes that detached buffer as the owned `Mat`, so `extract_mat`, `extract_stored_owned` and `into_mat` add no copy on top of it. A network built with `reuse_blob_memory` installs its own blob allocator, which skips the native detach clone, and an extractor with a borrowed input returns caller storage; both cases copy inside the wrapper instead so the owned tensor stays independent of the pools and the caller. Packing, light mode and local-pool defaults are unchanged. Guard access does not promise pointer identity for computed outputs or bypass these native operations. Input-blob extraction can retain the transferred input pointer; padded channels still require channel views.
+Low-copy describes omission of the wrapper's final deep clone. A null native allocator or different data pointer does not prove output independence. Native extraction shallow-assigns cached tensors, including input-blob aliases; consuming a Rust input does not remove those native references. Final vectors copy logical values instead of certifying output independence from allocator identity. The installed 20261020 `Extractor::extract` performs type-0 unpacking, supported precision conversions, and a deep clone whenever the result comes from the network's own local blob pool, which is the default: that clone detaches the tensor from the pool so it can outlive the network, and it is the only copy the owned forms pay. The wrapper takes that detached buffer as the owned `Mat`, so `extract_mat` with either width and `into_mat` add no copy on top of it. A network built with `reuse_blob_memory` installs its own blob allocator, which skips the native detach clone, and an extractor with a borrowed input returns caller storage; both cases copy inside the wrapper instead so the owned tensor stays independent of the pools and the caller. Packing, light mode and local-pool defaults are unchanged. Guard access does not promise pointer identity for computed outputs or bypass these native operations. Input-blob extraction can retain the transferred input pointer; padded channels still require channel views.
 
 Model files are trusted native input. The `DataReader` handle either owns a copy of the bytes or
 owns an open file, clamps every read to the bytes that remain, and scans parameter text, which is how
@@ -81,9 +81,9 @@ unsafe because the mapping has to outlive the network. Safe file APIs use Rust p
 
 `Mat::from_external` builds a native tensor over caller storage through the ncnn external
 constructors, which record no refcount and never free the buffer. `Extractor::input_borrowed` submits
-that tensor without a copy, and `Net::infer_borrowed` keeps the borrow inside one call: the tensors,
+that tensor without a copy, and `Input::borrowed` keeps the borrow inside one call: the tensors,
 the extractor and every native reference die before the function returns.
-`Net::infer_borrowed_into` adds the reusable output buffer, so a steady-state request allocates no data
+`Net::infer_into` adds the reusable output buffer, so a steady-state request allocates no data
 buffers in either direction. Both unsafe entry points require the storage to stay alive, keep its
 length and stay free of mutable aliases until the extractor drops, because ncnn stores inputs by
 shallow assignment.
@@ -137,9 +137,9 @@ of a two-dimensional one, and a five-channel tensor of single-element planes rea
 padding.
 
 Extraction converts packed, FP16, BF16 and INT8 storage to FP32 unless the caller asks for stored
-storage. `Extractor::extract_stored` keeps the layout the producing layer wrote, so `TensorInfo`
-reports the stored element width and the typed readers apply, while `extract` and the owned forms
-return converted FP32 values. The guarded borrow needs safe configuration and built-in layers; it
+storage. `Extractor::extract` with `TensorWidth::Stored` keeps the
+layout the producing layer wrote, so `TensorInfo` reports the stored element width and the typed
+readers apply, while `TensorWidth::Fp32` and the owned forms return converted values. The guarded borrow needs safe configuration and built-in layers; it
 also serves Vulkan networks, whose extraction downloads into network-owned CPU storage and detaches
 that copy from the pool allocator.
 
@@ -151,8 +151,8 @@ source, so the source outlives it and cannot be mutated while it lives; it drops
 without releasing storage, because a sub view carries no refcount. Each call range-checks the axis
 against the extents the tensor records, and a view that reaches an extractor copies, since an alias
 keeps no storage of its own. The borrowed path does not copy: `MatView::as_mat` exposes the aliased
-tensor for `Extractor::input_borrowed`, and `Net::infer_view_into` runs one request over sub views
-and appends the outputs to a caller buffer. That call creates and drops the extractor itself, so the
+tensor for `Extractor::input_borrowed`, and `Input::view` runs one request over sub views and
+appends the outputs to a caller buffer. That call creates and drops the extractor itself, so the
 borrow of the sources covers every native read and no aliasing escapes; it requires light mode off,
 like every other borrowed input. `Mat::is_empty` reports a tensor whose storage was never created,
 `TensorInfo::total` reports the native storage slots including padding, and `TensorInfo::shape`

@@ -18,7 +18,7 @@ The repository contains two packages:
   and `infer_stored` keeps the element width a layer wrote.
 - Batched tensors, layout rewriting with `flatten` and `with_packing`, and consuming helpers
   (`into_normalized`/`into_reshape`) that skip the copy when the caller owns the storage.
-- Zero-copy requests: `Mat::from_external`, `Extractor::input_borrowed` and `Net::infer_borrowed`
+- Zero-copy requests: `Mat::from_external`, `Extractor::input_borrowed` and `Input::borrowed`
   submit caller memory without a copy.
 - Graph introspection: `Net::layers` and `Net::blobs` report the wiring, the shapes and the support
   flags ncnn declares for each layer type, and `layer_type_index` resolves a type name to its index.
@@ -88,7 +88,7 @@ no build script downloads anything on its own.
 ## Usage
 
 ```rust
-use ncnn_rust::{Mat, Net};
+use ncnn_rust::{Input, Mat, Net};
 
 let net = Net::builder()?.threads(2)?.load_files("model.param", "model.bin")?;
 let input = Mat::from_f32(&values, &[224, 224, 3])?;
@@ -96,6 +96,25 @@ let outputs = net.infer([("input", input)], &["output"])?;
 for output in outputs {
     println!("{:?} {}", output.info, output.values.len());
 }
+```
+
+A request has one storage decision per side. On an extractor:
+
+| Form | Storage |
+|---|---|
+| `extract(endpoint, width)` | borrowed read-only guard, which reserves the network until it drops |
+| `extract_mat(endpoint, width)` | owned native tensor, without a second copy on the default pool |
+| `extract_into(endpoint, buffer)` | appended to a caller vector that keeps its capacity |
+| `extract_owned(endpoint)` | independent FP32 values |
+
+`TensorWidth` selects FP32 conversion or the width the layer wrote. On a network, `Input` carries
+that same decision, so one method covers owned storage, borrowed FP32 values and tensor sub views:
+
+```rust
+let outputs = net.infer([("input", Mat::from_f32(&values, &[224, 224, 3])?)], &["output"])?;
+let borrowed = net.infer([("input", Input::borrowed(&values, &[224, 224, 3]))], &["output"])?;
+let mut buffer = Vec::new();
+net.infer_into([("input", Input::view(&image.channel(0)?))], &["output"], &mut buffer)?;
 ```
 
 For repeated inference resolve endpoints once and fill one reusable vector:
@@ -128,7 +147,7 @@ let bytes: Vec<i8> = stored.to_i8()?;
 ```
 
 `Mat::from_typed` and `Mat::from_i8` build the same storage for an input side, and
-`Extractor::extract_stored` borrows it while one extractor runs. The
+`Extractor::extract` with `TensorWidth::Stored` borrows it while one extractor runs. The
 [typed tensor example](crates/ncnn/examples/typed_tensors.rs) and the
 [resident Vulkan example](crates/ncnn/examples/vulkan_resident.rs) run end to end.
 
@@ -152,12 +171,16 @@ insert an explicit `Split` layer or keep light mode off.
 
 Part of a tensor is readable without copying it. A view aliases the source storage: the slice
 readers borrow it, `to_f32` copies out of it, and `Extractor::input` copies it because an alias keeps
-no storage of its own. `Net::infer_view_into` reads the region where it lives, which is the
-zero-copy form for a model that takes a crop, a channel or one batch item:
+no storage of its own. `Input::view` reads the region where it lives, which is the zero-copy form
+for a model that takes a crop, a channel or one batch item:
 
 ```rust
 let mut buffer = Vec::new();
-let ranges = net.infer_view_into(&[("input", &image.channel(0)?)], &["output"], &mut buffer)?;
+let ranges = net.infer_into(
+    [("input", Input::view(&image.channel(0)?))],
+    &["output"],
+    &mut buffer,
+)?;
 let range = &ranges[0].values;
 let values = &buffer[range.start..range.end];
 ```
@@ -222,7 +245,7 @@ native clone that `Extractor::extract` already performs, which costs 226 us on t
 records both with their allocation counts, the native C references they compare against, and the
 glibc and NT heap behaviour that decides what a fresh 256 KB buffer costs.
 That is why the reuse forms exist: `NetBuilder::reuse_blob_memory()` moves the engine's intermediate
-tensors into pools it owns, `infer_into` and `infer_borrowed_into` remove the caller vector, and
+tensors into pools it owns, `infer_into` removes the caller vector for owned and borrowed inputs, and
 `ncnn_rust::heap::retain_pages()` keeps a caller-allocated buffer's pages mapped on glibc. The
 per-helper preprocessing medians, the pooling comparison, the Linux page-fault campaign, the worker
 scaling and the reproduction commands are in [Performance](docs/performance.md).

@@ -6,7 +6,7 @@ mod graph;
 mod output;
 
 pub use blob::{BlobId, Endpoint};
-pub use extractor::{Extractor, OutputGuard};
+pub use extractor::{Extractor, OutputGuard, TensorWidth};
 pub use graph::{BlobInfo, LayerInfo, ShapeInfo};
 pub use output::{FinalOutput, OutputRange};
 
@@ -23,6 +23,56 @@ use std::{
 };
 
 use blob::BlobKind;
+
+/// One input of a request.
+///
+/// The variant decides what the call does with the storage. [`Input::Owned`] transfers a tensor the
+/// crate created or cloned, [`Input::Borrowed`] reads FP32 values where the caller keeps them, and
+/// [`Input::View`] reads a region of an existing tensor without copying it. A borrowed entry is
+/// only valid for the call that receives it, which is why [`Net::infer`] and
+/// [`Net::infer_into`] bound the borrow themselves.
+pub enum Input<'a> {
+    /// Tensor storage this request owns.
+    Owned(Mat),
+    /// Unpacked FP32 values and their extents, read where the caller keeps them.
+    Borrowed {
+        /// Values in channel-plane order.
+        values: &'a [f32],
+        /// Extents in ncnn order, without the batch dimension.
+        dimensions: &'a [usize],
+    },
+    /// A tensor sub view, which keeps no storage of its own.
+    View(&'a crate::MatView<'a>),
+}
+
+impl<'a> Input<'a> {
+    /// Reads FP32 values the caller keeps, without copying them.
+    pub fn borrowed(values: &'a [f32], dimensions: &'a [usize]) -> Self {
+        Self::Borrowed { values, dimensions }
+    }
+    /// Reads a tensor sub view, without copying it.
+    pub fn view(view: &'a crate::MatView<'a>) -> Self {
+        Self::View(view)
+    }
+}
+
+impl From<Mat> for Input<'_> {
+    fn from(mat: Mat) -> Self {
+        Self::Owned(mat)
+    }
+}
+
+impl<'a> From<(&'a [f32], &'a [usize])> for Input<'a> {
+    fn from((values, dimensions): (&'a [f32], &'a [usize])) -> Self {
+        Self::Borrowed { values, dimensions }
+    }
+}
+
+impl<'a, 'view: 'a> From<&'a crate::MatView<'view>> for Input<'a> {
+    fn from(view: &'a crate::MatView<'view>) -> Self {
+        Self::View(view)
+    }
+}
 
 /// Converts a filesystem path into the UTF-8 form the native loaders accept.
 fn utf8_path(path: &Path) -> Result<CString> {
@@ -70,7 +120,7 @@ impl GuardState {
 /// let mut net = ncnn_rust::Net::new().unwrap();
 /// let mut ex = net.extractor().unwrap();
 /// net.clear();
-/// ex.extract("output").unwrap();
+/// ex.extract("output", ncnn_rust::TensorWidth::Fp32).unwrap();
 /// ```
 ///
 /// # Thread affinity
@@ -106,8 +156,8 @@ pub struct Net {
 /// The fields are read only by their destructors, which run after the native network is destroyed.
 #[allow(dead_code, reason = "held for its destructor order")]
 struct NetPools {
-    blob: crate::PoolAllocator,
-    workspace: crate::PoolAllocator,
+    blob: crate::alloc::Pool,
+    workspace: crate::alloc::Pool,
 }
 /// Configures a network and loads its model in one expression.
 ///
@@ -130,7 +180,8 @@ impl NetBuilder {
     /// The device is retained for the network's lifetime and has to be selected before parameters
     /// load, which is why the builder offers it here. ncnn keeps per-layer CPU fallback, so this
     /// selects a backend rather than guaranteeing GPU placement. FP32 output guards become
-    /// unavailable on a device network; [`Extractor::extract_stored`](crate::Extractor::extract_stored)
+    /// unavailable on a device network; [`Extractor::extract`](crate::Extractor::extract) with
+    /// [`TensorWidth::Stored`]
     /// and [`Net::infer_stored`] still serve it.
     #[cfg(feature = "vulkan")]
     pub fn vulkan(mut self, device: crate::gpu::Device) -> Self {
@@ -161,8 +212,8 @@ impl NetBuilder {
     /// [`heap::retain_pages`](crate::heap::retain_pages), which is about the pages of a buffer the
     /// caller allocates.
     pub fn reuse_blob_memory(mut self) -> Result<Self> {
-        let blob = crate::PoolAllocator::new()?;
-        let workspace = crate::PoolAllocator::new()?;
+        let blob = crate::alloc::Pool::new()?;
+        let workspace = crate::alloc::Pool::new()?;
         // SAFETY: the two pools move into the network built from this option block, which is the
         // only network that uses them, and they outlive its native handle. A fresh pair per builder
         // keeps the pools exclusive to one network.
@@ -303,16 +354,18 @@ impl Net {
         }
         Ok(crate::GraphLayer::borrowed(raw))
     }
-    /// Runs owned inputs and returns validated, independently owned final buffers.
+    /// Runs one request and returns validated, independently owned final buffers.
     ///
-    /// Every output is converted to FP32, so a network that returns quantized storage needs
+    /// Each entry pairs a name with an [`Input`]: tensor storage this call owns, FP32 values the
+    /// caller keeps, or a tensor sub view. A borrowed entry is read where it lives, and the borrow
+    /// covers the whole call, which is what makes the zero-copy input path safe. Every output is
+    /// converted to FP32, so a network that returns quantized storage needs
     /// [`infer_stored`](Self::infer_stored) instead.
     ///
     /// Every request allocates the output vector and frees it again, which is the largest cost of
     /// this form on a host whose heap returns freed pages to the kernel.
-    /// [`infer_into`](Self::infer_into) and [`infer_borrowed_into`](Self::infer_borrowed_into) write
-    /// into a caller buffer instead and allocate no data buffer, and
-    /// [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
+    /// [`infer_into`](Self::infer_into) writes into a caller buffer instead and allocates no data
+    /// buffer, and [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
     ///
     /// The native network allocates its intermediate tensors per request as well.
     /// [`NetBuilder::reuse_blob_memory`] gives those tensors a pool the network owns, which removes
@@ -330,60 +383,60 @@ impl Net {
     /// assert_eq!(outputs[0].values, [0.0, 2.0]);
     /// # Ok::<(), ncnn_rust::Error>(())
     /// ```
-    pub fn infer(
+    pub fn infer<'a>(
         &self,
-        inputs: impl IntoIterator<Item = (impl AsRef<str>, Mat)>,
+        inputs: impl IntoIterator<Item = (impl AsRef<str>, impl Into<Input<'a>>)>,
         outputs: &[&str],
     ) -> Result<Vec<FinalOutput>> {
         let mut extractor = self.extractor()?;
-        for (name, mat) in inputs {
-            extractor.input(Endpoint::Name(name.as_ref()), mat)?;
-        }
+        let _storage = self.submit_inputs(&mut extractor, inputs)?;
         outputs
             .iter()
             .map(|name| extractor.extract_owned(Endpoint::Name(name)))
             .collect()
     }
-    /// Runs owned inputs and returns stored storage with the metadata of each output.
+    /// Runs one request and returns stored storage with the metadata of each output.
     ///
     /// The element width of every output is preserved, so a quantized model is readable through
     /// [`Mat::to_f32_typed`](crate::Mat::to_f32_typed) or [`Mat::to_i8`](crate::Mat::to_i8).
-    pub fn infer_stored(
+    pub fn infer_stored<'a>(
         &self,
-        inputs: impl IntoIterator<Item = (impl AsRef<str>, Mat)>,
+        inputs: impl IntoIterator<Item = (impl AsRef<str>, impl Into<Input<'a>>)>,
         outputs: &[&str],
     ) -> Result<Vec<(crate::TensorInfo, Mat)>> {
         let mut extractor = self.extractor()?;
-        for (name, mat) in inputs {
-            extractor.input(Endpoint::Name(name.as_ref()), mat)?;
-        }
+        let _storage = self.submit_inputs(&mut extractor, inputs)?;
         outputs
             .iter()
             .map(|name| {
-                let mat = extractor.extract_stored_owned(Endpoint::Name(name))?;
+                let mat = extractor.extract_mat(Endpoint::Name(name), TensorWidth::Stored)?;
                 let info = mat.info();
                 Ok((info, mat))
             })
             .collect()
     }
     /// Replaces a caller-owned vector with concatenated outputs in name order.
-    /// Returned metadata identifies every output range. Input failure preserves
-    /// the vector; extraction failure leaves only completed output values.
-    pub fn infer_into(
+    ///
+    /// Returned metadata identifies every output range. Input failure preserves the vector;
+    /// extraction failure leaves only completed output values.
+    ///
+    /// A borrowed entry is read where the caller keeps it, so a steady-state loop allocates no data
+    /// buffer on either side: the input needs no copy and the output reuses this vector. Light mode
+    /// rejects a borrowed input, because the native forward path reads a storage refcount that an
+    /// external tensor does not carry.
+    pub fn infer_into<'a>(
         &self,
-        inputs: impl IntoIterator<Item = (impl AsRef<str>, Mat)>,
+        inputs: impl IntoIterator<Item = (impl AsRef<str>, impl Into<Input<'a>>)>,
         outputs: &[&str],
         buffer: &mut Vec<f32>,
     ) -> Result<Vec<OutputRange>> {
         let mut extractor = self.extractor()?;
-        for (name, mat) in inputs {
-            extractor.input(Endpoint::Name(name.as_ref()), mat)?;
-        }
+        let _storage = self.submit_inputs(&mut extractor, inputs)?;
         buffer.clear();
         let mut ranges = Vec::with_capacity(outputs.len());
         for name in outputs {
             let start = buffer.len();
-            let info = extractor.extract_append(Endpoint::Name(name), buffer)?;
+            let info = extractor.extract_into(Endpoint::Name(name), buffer)?;
             ranges.push(OutputRange {
                 name: (*name).to_owned(),
                 info,
@@ -391,6 +444,34 @@ impl Net {
             });
         }
         Ok(ranges)
+    }
+    /// Submits every input and keeps the storage the extractions still read.
+    fn submit_inputs<'a>(
+        &self,
+        extractor: &mut Extractor<'_>,
+        inputs: impl IntoIterator<Item = (impl AsRef<str>, impl Into<Input<'a>>)>,
+    ) -> Result<Vec<Mat>> {
+        let mut storage = Vec::new();
+        for (name, input) in inputs {
+            let name = Endpoint::Name(name.as_ref());
+            match input.into() {
+                Input::Owned(mat) => extractor.input(name, mat)?,
+                Input::Borrowed { values, dimensions } => {
+                    // SAFETY: `values` outlives this call, and the tensor joins `storage`, which
+                    // the caller holds until every extraction has finished.
+                    let mat = unsafe { Mat::from_external(values, dimensions)? };
+                    // SAFETY: the tensor stays reachable through `storage` for the request.
+                    unsafe { extractor.input_borrowed(name, &mat)? };
+                    storage.push(mat);
+                }
+                Input::View(view) => {
+                    // SAFETY: the view borrows its source for the whole call, and the extractor is
+                    // dropped before this function returns.
+                    unsafe { extractor.input_borrowed(name, view.as_mat())? };
+                }
+            }
+        }
+        Ok(storage)
     }
     /// Creates an empty network with default options.
     ///
@@ -665,115 +746,6 @@ impl Net {
         let mut value = 0;
         unsafe { status(sys::ncnn_rs_option_get(option, key as i32, &mut value))? };
         Ok(value)
-    }
-    /// Runs one request over borrowed FP32 inputs without copying them.
-    ///
-    /// Each entry is the input name, the values in channel-plane order and the shape. The borrows
-    /// cover the whole request, which is what makes the zero-copy input path safe; outputs are
-    /// independent values as in [`infer`](Self::infer). This is the form to use when frames already
-    /// sit in caller memory.
-    pub fn infer_borrowed(
-        &self,
-        inputs: &[(&str, &[f32], &[usize])],
-        outputs: &[&str],
-    ) -> Result<Vec<FinalOutput>> {
-        let mut extractor = self.extractor()?;
-        let mut tensors = Vec::with_capacity(inputs.len());
-        for (_, values, dimensions) in inputs {
-            // SAFETY: `values` outlives this function, and neither the tensor nor the extractor
-            // leaves it, so every native read happens inside the borrow.
-            tensors.push(unsafe { Mat::from_external(values, dimensions)? });
-        }
-        for ((name, _, _), tensor) in inputs.iter().zip(&tensors) {
-            // SAFETY: `tensors` keeps the borrowed storage reachable until the extractions below
-            // finish, and the extractor does not outlive them.
-            unsafe { extractor.input_borrowed(*name, tensor)? };
-        }
-        let mut collected = Vec::with_capacity(outputs.len());
-        for name in outputs {
-            collected.push(extractor.extract_owned(*name)?);
-        }
-        Ok(collected)
-    }
-    /// Runs one request over borrowed inputs and writes the outputs into a caller vector.
-    ///
-    /// This is the fused form of [`infer_borrowed`](Self::infer_borrowed) and
-    /// [`infer_into`](Self::infer_into): the inputs are read where the caller keeps them and the
-    /// outputs are appended to `buffer`, which keeps its capacity, so a steady-state loop allocates
-    /// no data buffers on either side. The range records and the borrow that resolves each name stay
-    /// as small per-request allocations. The returned ranges identify each output the same way
-    /// [`infer_into`](Self::infer_into) does, and a failure leaves the vector as it was before the
-    /// call.
-    ///
-    /// Light mode rejects a borrowed input, because the native forward path reads a storage refcount
-    /// that an external tensor does not carry; use [`infer_into`](Self::infer_into) there.
-    pub fn infer_borrowed_into(
-        &self,
-        inputs: &[(&str, &[f32], &[usize])],
-        outputs: &[&str],
-        buffer: &mut Vec<f32>,
-    ) -> Result<Vec<OutputRange>> {
-        let mut extractor = self.extractor()?;
-        let mut tensors = Vec::with_capacity(inputs.len());
-        for (_, values, dimensions) in inputs {
-            // SAFETY: `values` outlives this function, and neither the tensor nor the extractor
-            // leaves it, so every native read happens inside the borrow.
-            tensors.push(unsafe { Mat::from_external(values, dimensions)? });
-        }
-        for ((name, _, _), tensor) in inputs.iter().zip(&tensors) {
-            // SAFETY: `tensors` keeps the borrowed storage reachable until the extractions below
-            // finish, and the extractor does not outlive them.
-            unsafe { extractor.input_borrowed(*name, tensor)? };
-        }
-        buffer.clear();
-        let mut ranges = Vec::with_capacity(outputs.len());
-        for name in outputs {
-            let start = buffer.len();
-            let info = extractor.extract_append(*name, buffer)?;
-            ranges.push(OutputRange {
-                name: (*name).to_owned(),
-                info,
-                values: start..buffer.len(),
-            });
-        }
-        Ok(ranges)
-    }
-    /// Runs one request over tensor sub views and writes the outputs into a caller vector.
-    ///
-    /// A [`MatView`](crate::MatView) aliases part of a tensor and keeps no storage of its own, so
-    /// [`Extractor::input`](crate::Extractor::input) copies one. This form reads the region where it
-    /// already lives, which is the zero-copy path for a model that takes a crop, a channel or one
-    /// batch item as its input.
-    ///
-    /// The inputs and the extractor are created and dropped inside the call, so the borrow of the
-    /// source tensors covers every native read; the returned ranges identify each output the same
-    /// way [`infer_into`](Self::infer_into) does. Light mode rejects the call, because the native
-    /// forward path reads a storage refcount that a sub view does not carry, and a failed call
-    /// leaves `buffer` as it was.
-    pub fn infer_view_into(
-        &self,
-        inputs: &[(&str, &crate::MatView<'_>)],
-        outputs: &[&str],
-        buffer: &mut Vec<f32>,
-    ) -> Result<Vec<OutputRange>> {
-        let mut extractor = self.extractor()?;
-        for (name, view) in inputs {
-            // SAFETY: the views borrow their sources for the whole call, and the extractor is
-            // dropped before this function returns, so every native read stays inside that borrow.
-            unsafe { extractor.input_borrowed(*name, view.as_mat())? };
-        }
-        buffer.clear();
-        let mut ranges = Vec::with_capacity(outputs.len());
-        for name in outputs {
-            let start = buffer.len();
-            let info = extractor.extract_append(*name, buffer)?;
-            ranges.push(OutputRange {
-                name: (*name).to_owned(),
-                info,
-                values: start..buffer.len(),
-            });
-        }
-        Ok(ranges)
     }
     /// Loads text parameters through a data reader.
     ///

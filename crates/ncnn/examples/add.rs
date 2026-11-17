@@ -1,3 +1,4 @@
+use ncnn_rust::Input;
 use ncnn_rust::{Mat, Net};
 
 fn main() -> ncnn_rust::Result<()> {
@@ -45,8 +46,11 @@ fn main() -> ncnn_rust::Result<()> {
 
     // One request over borrowed FP32 slices: the native extractor reads caller memory in place,
     // and the borrow ends with the call.
-    let borrowed = net.infer_borrowed(
-        &[("a", &[1., 2., 3.], &[3]), ("b", &[4., 5., 6.], &[3])],
+    let borrowed = net.infer(
+        [
+            ("a", Input::borrowed(&[1., 2., 3.], &[3])),
+            ("b", Input::borrowed(&[4., 5., 6.], &[3])),
+        ],
         &["sum"],
     )?;
     println!("Borrowed request: {:?}", borrowed[0].values);
@@ -57,7 +61,7 @@ fn main() -> ncnn_rust::Result<()> {
         extractor.input(&input_a, Mat::from_f32(&[1., 2., 3.], &[3])?)?;
         extractor.input(&input_b, Mat::from_f32(&[4., 5., 6.], &[3])?)?;
         values.clear();
-        extractor.extract_append(&sum, &mut values)?;
+        extractor.extract_into(&sum, &mut values)?;
         println!("{values:?}");
     }
     if !use_vulkan {

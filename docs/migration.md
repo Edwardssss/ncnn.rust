@@ -42,6 +42,18 @@ Behaviour that has changed between ncnn releases without a C API change:
   per-extractor settings (`set_light_mode`, the three allocators and the
   cache length hint), `Extractor::clear` and `Net::layer_handle`. No signature changed except that
   `Extractor::set_light_mode` now returns `Result`, so an existing caller compiles unchanged.
+- **0.3.x to 0.4.0** - the request forms collapse onto one storage decision per side.
+  `Extractor::extract(endpoint)` and `Extractor::extract_stored(endpoint)` become
+  `extract(endpoint, TensorWidth::Fp32)` and `extract(endpoint, TensorWidth::Stored)`, and
+  `extract_mat` and `extract_stored_owned` become `extract_mat(endpoint, TensorWidth::Fp32)` and
+  `extract_mat(endpoint, TensorWidth::Stored)`. `extract_into` appends instead of replacing, and
+  `extract_append` is gone: a caller that wants the output alone clears the vector first, which keeps
+  its capacity and its steady state allocation-free. On `Net`, `infer` and `infer_into` take an
+  `Input`, so `infer_borrowed(&[("input", values, &[4])], outputs)` becomes
+  `infer([("input", Input::borrowed(values, &[4]))], outputs)` and `infer_view_into(inputs, outputs,
+  buffer)` becomes `infer_into(inputs, outputs, buffer)` with `Input::view`; `infer_borrowed_into`
+  becomes `infer_into` the same way. The extractor request surface drops from eight methods to four
+  and the network from six to three, and no capability is lost.
 - **Patch releases** never change the pinned ncnn release, the public API or the storage contracts.
 
 ## Compatibility with the native library

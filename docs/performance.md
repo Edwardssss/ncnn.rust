@@ -134,8 +134,8 @@ platforms, so the binding adds the call, the endpoint resolution and nothing els
 The owned forms pay one native copy, and the wrapper adds none. `Extractor::extract` deep-clones an
 output whose storage comes from the network's local blob pool (`src/net.cpp`, the branch that
 detaches the result so it can outlive the network), and that pool is the default. The clone is
-therefore the copy an independent tensor costs; `extract_mat`, `extract_stored_owned` and
-`into_mat` keep that buffer instead of duplicating it, which is why they hold no allocation of their
+therefore the copy an independent tensor costs; `extract_mat` with either width and `into_mat` keep
+that buffer instead of duplicating it, which is why they hold no allocation of their
 own. The value-vector forms add a second buffer: `owned-view` allocates 262144 bytes per request on
 top of the native clone, which costs twenty times the owned-tensor form on the guest and more as soon
 as the Windows host leaves its fast heap state.
@@ -179,7 +179,7 @@ and reporting medians; 65536 elements, one core, three runs per host:
 | `extract_mat` (zero-copy owned output) | 23871 to 31283 ns | 23610 to 25118 ns | 47356 ns | 44354 ns |
 | `extract_owned` (owned value vector) | 29392 to 34542 ns | 24091 to 24962 ns | 98998 ns | 47087 ns |
 | `infer_into` (owned input, reused buffer) | 30697 to 31413 ns | 23589 to 23976 ns | 55282 ns | 29154 ns |
-| `infer_borrowed_into` (borrowed input and buffer) | 22916 to 23433 ns | 16793 to 17920 ns | 29552 ns | 18502 ns |
+| `infer_into`, borrowed input (borrowed input and buffer) | 22916 to 23433 ns | 16793 to 17920 ns | 29552 ns | 18502 ns |
 
 The guest values are the range of three runs and the Windows values the minimum of three runs.
 Rotating the cases warms the heap for every form, so the absolute figures here are lower than the
@@ -294,7 +294,7 @@ output vector per request and lands at 226 us, `copy` allocates two data buffers
 clone and lands at 497 us, and setting the same two variables in the environment drops them to
 16.2 us and 31.0 us.
 
-Two conclusions follow. Reusing storage is the portable fix, and `infer_into`, `infer_borrowed_into`
+Two conclusions follow. Reusing storage is the portable fix, and `infer_into` for owned and borrowed
 and `extract` already do that at native parity. Where an application cannot reuse, the heap decides:
 `heap::retain_pages` sets both thresholds from inside the process, a host that starts the process
 can set the same two variables instead, and an allocator that retains pages is the equivalent on a

@@ -1,5 +1,7 @@
-use ncnn::{sys, Mat, Options, ParamDict, PoolAllocator};
+use ncnn::alloc::Pool;
+use ncnn::{sys, Mat, Options, ParamDict};
 use ncnn_rust as ncnn;
+use ncnn_rust::TensorWidth;
 
 pub fn run() -> ncnn::Result<()> {
     assert!(ncnn::cpu::physical_core_count()? > 0);
@@ -104,7 +106,7 @@ pub fn run() -> ncnn::Result<()> {
         "prior",
         Mat::from_f32(&[0., 0., 1., 1., 0.1, 0.1, 0.2, 0.2], &[4, 2])?,
     )?;
-    let detections = de.extract("detections")?.to_f32()?;
+    let detections = de.extract("detections", TensorWidth::Fp32)?.to_f32()?;
     assert_eq!(detections.len(), 6);
     assert_eq!(detections[0], 1.);
     assert!((detections[1] - 0.9).abs() < 1e-6);
@@ -122,7 +124,10 @@ pub fn run() -> ncnn::Result<()> {
     sequence.load_model(&weights)?;
     let mut se = sequence.extractor()?;
     se.input("input", Mat::from_f32(&[1., 2., 3.], &[1, 3])?)?;
-    assert_eq!(se.extract("output")?.to_f32()?, vec![0.; 3]);
+    assert_eq!(
+        se.extract("output", TensorWidth::Fp32)?.to_f32()?,
+        vec![0.; 3]
+    );
     unsafe {
         let mut calls = [0usize; 4];
         eprintln!("advanced: model callbacks");
@@ -248,7 +253,7 @@ pub fn run() -> ncnn::Result<()> {
         let aligned = sys::ncnn_rs_fast_malloc(128);
         assert!(!aligned.is_null());
         sys::ncnn_rs_fast_free(aligned);
-        let pool = PoolAllocator::new()?;
+        let pool = Pool::new()?;
         assert_eq!(sys::ncnn_rs_pool_configure(pool.as_raw(), 0, 0.5, 8), 0);
         let m = sys::ncnn_mat_create_1d(4, pool.as_raw());
         sys::ncnn_rs_pool_clear(pool.as_raw(), 0);

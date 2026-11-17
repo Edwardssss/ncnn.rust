@@ -1,5 +1,6 @@
 use ncnn::{CpuOption, Mat, Net, Options};
 use ncnn_rust as ncnn;
+use ncnn_rust::TensorWidth;
 use std::{io::Read, path::Path, process::Command};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -358,7 +359,7 @@ fn check_runs(
             })?;
         } else {
             if !guarded {
-                assert!(ex.extract(&native[0].name).is_err());
+                assert!(ex.extract(&native[0].name, TensorWidth::Fp32).is_err());
             }
             for (index, expected) in native.iter().enumerate() {
                 let output = ex.extract_owned(&expected.name)?;

@@ -11,6 +11,7 @@
 //!
 //! Run it with `cargo run --release -p ncnn-rust --example heap_retention`.
 
+use ncnn_rust::Input;
 use ncnn_rust::{heap, Mat, Net};
 use std::hint::black_box;
 use std::time::Instant;
@@ -31,7 +32,11 @@ fn owned(net: &Net, values: &[f32]) {
 
 fn fused(net: &Net, values: &[f32], buffer: &mut Vec<f32>) {
     let ranges = net
-        .infer_borrowed_into(&[("input", values, &[values.len()])], &["output"], buffer)
+        .infer_into(
+            [("input", Input::borrowed(values, &[values.len()]))],
+            &["output"],
+            buffer,
+        )
         .unwrap();
     black_box(buffer[ranges[0].values.clone()][0]);
 }

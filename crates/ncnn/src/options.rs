@@ -272,7 +272,7 @@ impl Options {
     /// The allocator stays alive and usable until every network configured from this option block
     /// is dropped, and no other network may claim the same pool at the same time. The native option
     /// block stores the handle without taking ownership.
-    pub unsafe fn set_blob_allocator(&mut self, allocator: &crate::PoolAllocator) -> Result<()> {
+    pub unsafe fn set_blob_allocator(&mut self, allocator: &crate::alloc::Pool) -> Result<()> {
         sys::ncnn_option_set_blob_allocator(self.raw, allocator.as_raw());
         Ok(())
     }
@@ -282,10 +282,7 @@ impl Options {
     ///
     /// The same lifetime and exclusivity rules as
     /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
-    pub unsafe fn set_workspace_allocator(
-        &mut self,
-        allocator: &crate::PoolAllocator,
-    ) -> Result<()> {
+    pub unsafe fn set_workspace_allocator(&mut self, allocator: &crate::alloc::Pool) -> Result<()> {
         sys::ncnn_option_set_workspace_allocator(self.raw, allocator.as_raw());
         Ok(())
     }
@@ -298,7 +295,7 @@ impl Options {
     ///
     /// The same lifetime and exclusivity rules as
     /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
-    pub unsafe fn set_kvcache_allocator(&mut self, allocator: &crate::PoolAllocator) -> Result<()> {
+    pub unsafe fn set_kvcache_allocator(&mut self, allocator: &crate::alloc::Pool) -> Result<()> {
         sys::ncnn_option_set_kvcache_allocator(self.raw, allocator.as_raw());
         Ok(())
     }

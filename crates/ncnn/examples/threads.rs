@@ -38,7 +38,7 @@ fn serve(native_threads: usize, requests: usize) -> Duration {
         let tensor = unsafe { Mat::from_external(&values, &[ELEMENTS]) }.unwrap();
         unsafe { extractor.input_borrowed("input", &tensor) }.unwrap();
         buffer.clear();
-        extractor.extract_append("output", &mut buffer).unwrap();
+        extractor.extract_into("output", &mut buffer).unwrap();
         black_box(buffer[0]);
     }
     start.elapsed()

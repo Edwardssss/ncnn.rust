@@ -2,6 +2,7 @@
 //! layout and scale agreement without needing a second implementation as a reference.
 
 use crate::support::{self, assert_close_with, tagged};
+use ncnn_rust::TensorWidth;
 use ncnn_rust::{ElementKind, Endpoint, Mat, Net};
 
 #[test]
@@ -63,12 +64,12 @@ fn run_cache_step(net: &Net, query: Mat, past: Option<(Mat, Mat)>) -> (i32, Mat,
             .expect("past value input");
     }
     let key = extractor
-        .extract_stored(Endpoint::Name("cache_k"))
+        .extract(Endpoint::Name("cache_k"), TensorWidth::Stored)
         .expect("key cache")
         .detach()
         .expect("key cache copy");
     let value = extractor
-        .extract_stored(Endpoint::Name("cache_v"))
+        .extract(Endpoint::Name("cache_v"), TensorWidth::Stored)
         .expect("value cache")
         .detach()
         .expect("value cache copy");
@@ -187,14 +188,14 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
         )
         .expect("input");
     let scaled = extractor
-        .extract(Endpoint::Name("scaled"))
+        .extract(Endpoint::Name("scaled"), TensorWidth::Fp32)
         .expect("scaled")
         .to_f32()
         .expect("scaled values");
     assert_close_with(&scaled, &reference, 0.5);
     let stored = {
         let guard = extractor
-            .extract_stored(Endpoint::Name("stored"))
+            .extract(Endpoint::Name("stored"), TensorWidth::Stored)
             .expect("stored");
         assert_eq!(guard.info().elemsize, 1, "quantized storage byte width");
         guard.to_i8().expect("stored values")
@@ -234,7 +235,7 @@ fn quantized_pipeline_keeps_its_one_byte_storage() {
             )
             .expect("input");
         extractor
-            .extract_stored_owned(Endpoint::Name("stored"))
+            .extract_mat(Endpoint::Name("stored"), TensorWidth::Stored)
             .expect("owned stored output")
     };
     assert_eq!(owned.info().elemsize, 1, "owned stored byte width");

@@ -16,7 +16,7 @@
 - 所有权转移式输入推理，输出可选最终向量或可复用缓冲区。
 - 类型化张量访问：`ElementKind` 读写覆盖 FP16、BF16 与各整数位宽，`infer_stored` 保留层写出的元素宽度。
 - 批量张量、`flatten` 与 `with_packing` 布局改写，以及调用方持有存储时免拷贝的消费式助手（`into_normalized`/`into_reshape`）。
-- 零拷贝请求：`Mat::from_external`、`Extractor::input_borrowed` 与 `Net::infer_borrowed` 直接提交调用方内存。
+- 零拷贝请求：`Mat::from_external`、`Extractor::input_borrowed` 与 `Input::borrowed` 直接提交调用方内存。
 - 计算图自省：`Net::layers` 与 `Net::blobs` 报告连线、形状以及 ncnn 为每种层类型声明的支持标志，`layer_type_index` 把层类型名解析为索引。
 - 作用域内的只读 CPU 输出守卫，在不复制的前提下占用网络。
 - 绑定到计算图的端点令牌，拒绝来自其他图或重新加载后的图的令牌。
@@ -62,7 +62,7 @@ export NCNN_INSTALL_DIR=/opt/ncnn-20261020
 ## 用法
 
 ```rust
-use ncnn_rust::{Mat, Net};
+use ncnn_rust::{Input, Mat, Net};
 
 let net = Net::builder()?.threads(2)?.load_files("model.param", "model.bin")?;
 let input = Mat::from_f32(&values, &[224, 224, 3])?;
@@ -70,6 +70,24 @@ let outputs = net.infer([("input", input)], &["output"])?;
 for output in outputs {
     println!("{:?} {}", output.info, output.values.len());
 }
+```
+
+一次请求对每一侧只有一个存储决定。在 extractor 上：
+
+| 形式 | 存储 |
+|---|---|
+| `extract(endpoint, width)` | 借用的只读守卫，网络在它释放前保持保留状态 |
+| `extract_mat(endpoint, width)` | 自有的原生张量，在默认池路径上不再二次拷贝 |
+| `extract_into(endpoint, buffer)` | 追加到调用方向量，容量跨请求保留 |
+| `extract_owned(endpoint)` | 独立拥有的 FP32 值 |
+
+`TensorWidth` 选择 FP32 转换还是层写出的元素宽度。在网络这一侧由 `Input` 承载同一个决定，因此一个方法同时覆盖自有存储、借用 FP32 值与张量子视图：
+
+```rust
+let outputs = net.infer([("input", Mat::from_f32(&values, &[224, 224, 3])?)], &["output"])?;
+let borrowed = net.infer([("input", Input::borrowed(&values, &[224, 224, 3]))], &["output"])?;
+let mut buffer = Vec::new();
+net.infer_into([("input", Input::view(&image.channel(0)?))], &["output"], &mut buffer)?;
 ```
 
 重复推理时先解析端点，再复用同一个缓冲区：
@@ -99,7 +117,7 @@ println!("每个元素 {} 字节", info.elemsize);
 let bytes: Vec<i8> = stored.to_i8()?;
 ```
 
-`Mat::from_typed` 与 `Mat::from_i8` 为输入侧构建同样的存储，`Extractor::extract_stored` 在单个 extractor 生命周期内借用它。[类型化张量示例](crates/ncnn/examples/typed_tensors.rs)与[常驻 Vulkan 示例](crates/ncnn/examples/vulkan_resident.rs)可端到端运行。
+`Mat::from_typed` 与 `Mat::from_i8` 为输入侧构建同样的存储，`Extractor::extract` 配合 `TensorWidth::Stored` 在单个 extractor 生命周期内借用它。[类型化张量示例](crates/ncnn/examples/typed_tensors.rs)与[常驻 Vulkan 示例](crates/ncnn/examples/vulkan_resident.rs)可端到端运行。
 
 extractor 可以安全复用：提交输入会重启本次请求，因此第二次推理会重新计算，而不是返回上一次缓存的结果。逐 extractor 的设置覆盖网络选项之外的部分，并在该重启后保留：
 
@@ -113,11 +131,15 @@ ex.set_kvcache_max_seqlen_hint(2048)?;
 
 跨输入保留状态的图（例如逐 token 解码时的注意力缓存）在下一个输入前调用 `ex.continue_session()`，该输入便延续缓存状态而不重启请求。light mode 会在第一个消费者之后释放中间张量，因此只要 `net.shared_blobs()` 列出被两层读取的 blob，`set_light_mode(true)` 就会被拒绝；请插入显式 `Split` 层或保持 light mode 关闭。
 
-张量的一部分可以直接读取而不复制。视图别名源存储：切片读取直接借用，`to_f32` 从中拷贝，而 `Extractor::input` 会复制，因为别名不持有自己的存储。`Net::infer_view_into` 就地读取该区域，适合以裁剪块、单通道或单个 batch 项作为输入的模型：
+张量的一部分可以直接读取而不复制。视图别名源存储：切片读取直接借用，`to_f32` 从中拷贝，而 `Extractor::input` 会复制，因为别名不持有自己的存储。`Input::view` 就地读取该区域，适合以裁剪块、单通道或单个 batch 项作为输入的模型：
 
 ```rust
 let mut buffer = Vec::new();
-let ranges = net.infer_view_into(&[("input", &image.channel(0)?)], &["output"], &mut buffer)?;
+let ranges = net.infer_into(
+    [("input", Input::view(&image.channel(0)?))],
+    &["output"],
+    &mut buffer,
+)?;
 let range = &ranges[0].values;
 let values = &buffer[range.start..range.end];
 ```
@@ -159,7 +181,7 @@ let values = &buffer[range.start..range.end];
 
 两行都把结果留在 extractor 已经 detach 出来的缓冲区里，因此封装层只增加调用与端点解析。`Extractor::input` 会消耗张量，在请求执行前释放调用方的引用：原生请求若一直持有输入句柄，就会阻断该缓冲区的 light mode 复用，在客户机上的代价是二十倍，因此封装层最快的形态也是它的默认形态。
 
-要求拷贝的形式按拷贝付费。每请求返回一个值向量，会在 `Extractor::extract` 已经执行的原生克隆之上再分配 256 KB，在客户机上为 226 微秒，而上面两行是 10.9 微秒；同时克隆输入与输出则分配两块这样的缓冲区。[性能文档](docs/performance.md)记录了这两种形式及其分配次数、与之对照的原生 C 参照，以及决定一块新 256 KB 缓冲区成本的 glibc 与 NT 堆行为。这正是复用形式存在的原因：`NetBuilder::reuse_blob_memory()` 把引擎的中间张量放进网络自有的池，`infer_into` 与 `infer_borrowed_into` 去掉调用方向量，`ncnn_rust::heap::retain_pages()` 在 glibc 上保留调用方缓冲区的页面。预处理各助手的逐个中位数、池分配对比、Linux 缺页测量、工作线程扩展以及复现命令见[性能文档](docs/performance.md)。
+要求拷贝的形式按拷贝付费。每请求返回一个值向量，会在 `Extractor::extract` 已经执行的原生克隆之上再分配 256 KB，在客户机上为 226 微秒，而上面两行是 10.9 微秒；同时克隆输入与输出则分配两块这样的缓冲区。[性能文档](docs/performance.md)记录了这两种形式及其分配次数、与之对照的原生 C 参照，以及决定一块新 256 KB 缓冲区成本的 glibc 与 NT 堆行为。这正是复用形式存在的原因：`NetBuilder::reuse_blob_memory()` 把引擎的中间张量放进网络自有的池，`infer_into` 为拥有与借用输入去掉调用方向量，`ncnn_rust::heap::retain_pages()` 在 glibc 上保留调用方缓冲区的页面。预处理各助手的逐个中位数、池分配对比、Linux 缺页测量、工作线程扩展以及复现命令见[性能文档](docs/performance.md)。
 
 ## 文档
 

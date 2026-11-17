@@ -4,6 +4,7 @@
 //! are; `from_typed` goes the other way round. Native `Dequantize` expects 32-bit integers, so a
 //! one-byte tensor is read through `to_i8` rather than through that layer.
 
+use ncnn_rust::TensorWidth;
 use ncnn_rust::{BorderMode, ElementKind, Mat, Net};
 
 const GRAPH: &str = "7767517\n2 2\nInput input 0 1 input\nQuantize quantize 1 1 input stored 0=1\n";
@@ -16,7 +17,7 @@ fn main() -> ncnn_rust::Result<()> {
     {
         let mut extractor = net.extractor()?;
         extractor.input("input", Mat::from_f32(&[0.1, 0.4, -0.2, 0.6], &[2, 2])?)?;
-        let guard = extractor.extract_stored("stored")?;
+        let guard = extractor.extract("stored", TensorWidth::Stored)?;
         println!("stored width: {} bytes", guard.info().elemsize);
         println!("stored bytes: {:?}", guard.to_i8()?);
     }

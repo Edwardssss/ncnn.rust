@@ -4,6 +4,12 @@
 //! storage. Owned input removes the aliasing question at the API boundary: [`Net::infer`]
 //! returns independent vectors and [`Extractor::extract`] borrows a scored CPU output.
 //!
+//! A request has one storage decision per side. [`Extractor::extract`] borrows a read-only guard and
+//! [`TensorWidth`] selects FP32 conversion or the stored width, [`Extractor::extract_mat`] keeps an
+//! owned tensor, [`Extractor::extract_into`] appends to a caller vector and
+//! [`Extractor::extract_owned`] returns values. [`Net::infer`] takes an [`Input`], which carries the
+//! same choice on the input side: owned storage, borrowed FP32 values or a tensor sub view.
+//!
 //! One extractor serves repeated requests: [`Extractor::input`] restarts the native handle once a
 //! request extracted, so a second request recomputes instead of returning the cached answer, and
 //! [`Extractor::continue_session`] keeps that cache when a graph carries state across inputs. A
@@ -14,7 +20,7 @@
 //! The forms that return independent storage allocate and free an output-sized buffer per request,
 //! which is the dominant cost of a small request on a host whose heap returns freed pages to the
 //! kernel. [`heap::retain_pages`] keeps those pages mapped on glibc Linux,
-//! [`Net::infer_borrowed_into`] removes the allocation by reusing a caller buffer, and
+//! [`Net::infer_into`] removes the allocation by reusing a caller buffer, and
 //! [`NetBuilder::reuse_blob_memory`] gives the network's intermediate tensors a pool it owns.
 //!
 //! ```compile_fail
@@ -41,6 +47,7 @@
 //! ```
 #![deny(missing_docs)]
 
+pub mod alloc;
 pub mod cpu;
 #[cfg(feature = "vulkan")]
 pub mod gpu;
@@ -63,11 +70,11 @@ pub use mat::{
     BorderMode, Borders, ElementKind, Mat, MatView, PixelFormat, ReshapeView, TensorInfo,
 };
 pub use net::{
-    BlobId, BlobInfo, Endpoint, Extractor, FinalOutput, LayerInfo, Net, NetBuilder, OutputGuard,
-    OutputRange, ShapeInfo,
+    BlobId, BlobInfo, Endpoint, Extractor, FinalOutput, Input, LayerInfo, Net, NetBuilder,
+    OutputGuard, OutputRange, ShapeInfo, TensorWidth,
 };
 pub use options::{CpuOption, OptionFlag, Options};
-pub use param::{ParamDict, ParamKind, PoolAllocator};
+pub use param::{ParamDict, ParamKind};
 
 /// Returns the pinned native version.
 pub fn version() -> &'static str {

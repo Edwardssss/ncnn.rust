@@ -127,8 +127,7 @@ let bytes = outputs[0].1.to_i8()?;
 ## Owned-output requests are far slower than the C API
 
 **Symptom:** `infer`, `extract_owned` or `infer_stored` cost several times more than the same request
-through the C API, while `infer_into`, `infer_borrowed_into` and `extract` are at native parity or
-faster.
+through the C API, while `infer_into` and `extract` are at native parity or faster.
 
 **Cause:** the request allocates in two places. The value-vector forms allocate the output vector and
 free it again on top of the native clone that `Extractor::extract` performs when the result comes
@@ -137,8 +136,8 @@ On Windows the default process heap is much slower than a thread-caching allocat
 Linux glibc serves output-sized requests from a fresh mapping and returns it to the kernel on free,
 so every request faults the pages again. The copy itself is not the cost.
 
-**Fix:** ask for an owned tensor instead of an owned vector. `extract_mat`, `extract_stored_owned`
-and `OutputGuard::into_mat` keep the buffer the extractor already detached, so they allocate no data
+**Fix:** ask for an owned tensor instead of an owned vector. `extract_mat` with either width and
+`OutputGuard::into_mat` keep the buffer the extractor already detached, so they allocate no data
 buffer at all.
 
 ```rust
@@ -156,8 +155,8 @@ net.infer_into(inputs, &["out"], &mut outputs)?;
 ```
 
 `reuse_blob_memory` attaches the pool allocators that serve the network's intermediate tensors,
-which is the half no process allocator setting reaches; `infer_into` and `infer_borrowed_into`
-remove the output vector allocation. The `pooled-request` mode of `api_benchmark` times both halves
+which is the half no process allocator setting reaches; `infer_into` removes the output vector
+allocation for owned and borrowed inputs. The `pooled-request` mode of `api_benchmark` times both halves
 on one host. A caller that keeps the value-vector form still pays one allocation per request, and the
 settings below address it. On glibc Linux the crate applies those settings itself:
 

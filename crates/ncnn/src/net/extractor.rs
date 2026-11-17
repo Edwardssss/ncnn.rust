@@ -38,6 +38,23 @@ pub struct Extractor<'net> {
     pub(crate) kvcache_hint: Option<i32>,
 }
 
+/// Element width an extraction asks the native extractor for.
+///
+/// Native extraction converts packed, half-precision, bfloat16 and INT8 storage to FP32 unless the
+/// caller asks for stored storage, so the width decides both the native conversion and which reader
+/// applies to the result. [`TensorWidth::Fp32`] returns `elemsize` 4 values that
+/// [`OutputGuard::as_f32_slice`] reads directly; [`TensorWidth::Stored`] keeps the width the
+/// producing layer wrote, which [Mat::to_i8](crate::Mat::to_i8) and
+/// [Mat::to_f32_typed](crate::Mat::to_f32_typed) read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TensorWidth {
+    /// Convert to unpacked FP32 inside the native extractor.
+    Fp32,
+    /// Keep the element width the producing layer wrote.
+    Stored,
+}
+
 enum Target {
     Named(CString),
     Indexed(i32),
@@ -118,7 +135,7 @@ impl Extractor<'_> {
             let device_stored = stored && self.low_copy.get() && self._net.has_device();
             if !device_stored {
                 return Err(Error::invalid(
-                    "Guarded outputs need the low-copy path: configure safe options before loading, avoid layer types that export raw handles, and keep one extractor per network; use extract_owned, infer or extract_stored_owned for independent storage instead",
+                    "Guarded outputs need the low-copy path: configure safe options before loading, avoid layer types that export raw handles, and keep one extractor per network; use extract_owned, extract_mat or infer for independent storage instead",
                 ));
             }
         }
@@ -164,7 +181,7 @@ impl Extractor<'_> {
     /// The allocator stays alive and usable until this extractor is dropped, and no other extractor
     /// or network claims the same pool at the same time. The native extractor stores the handle
     /// without taking ownership.
-    pub unsafe fn set_blob_allocator(&mut self, allocator: &crate::PoolAllocator) {
+    pub unsafe fn set_blob_allocator(&mut self, allocator: &crate::alloc::Pool) {
         unsafe { sys::ncnn_rs_extractor_allocator(self.raw, 0, allocator.as_raw()) };
         self.blob_allocator = Some(allocator.as_raw());
     }
@@ -174,7 +191,7 @@ impl Extractor<'_> {
     ///
     /// The same lifetime and exclusivity rules as
     /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
-    pub unsafe fn set_workspace_allocator(&mut self, allocator: &crate::PoolAllocator) {
+    pub unsafe fn set_workspace_allocator(&mut self, allocator: &crate::alloc::Pool) {
         unsafe { sys::ncnn_rs_extractor_allocator(self.raw, 1, allocator.as_raw()) };
         self.workspace_allocator = Some(allocator.as_raw());
     }
@@ -184,7 +201,7 @@ impl Extractor<'_> {
     ///
     /// The same lifetime and exclusivity rules as
     /// [`set_blob_allocator`](Self::set_blob_allocator) apply.
-    pub unsafe fn set_kvcache_allocator(&mut self, allocator: &crate::PoolAllocator) {
+    pub unsafe fn set_kvcache_allocator(&mut self, allocator: &crate::alloc::Pool) {
         unsafe { sys::ncnn_rs_extractor_allocator(self.raw, 2, allocator.as_raw()) };
         self.kvcache_allocator = Some(allocator.as_raw());
     }
@@ -377,7 +394,7 @@ impl Extractor<'_> {
     ///
     /// The tensor and the storage behind it must stay alive and unmodified until every extraction
     /// that reads this input has finished and the extractor is dropped. [`input`](Self::input)
-    /// copies instead, which is why it is safe. [`Net::infer_borrowed`](crate::Net::infer_borrowed)
+    /// copies instead, which is why it is safe. [`Input::borrowed`](crate::Input::borrowed)
     /// bounds the borrow to one request.
     pub unsafe fn input_borrowed<'a>(
         &mut self,
@@ -418,51 +435,17 @@ impl Extractor<'_> {
     ///
     /// The guard reserves the network for its lifetime, so no other extractor starts and no input
     /// replacement happens until it drops. Eligibility needs the low-copy path: safe options before
-    /// loading, no raw handle exports, and one live extractor. A device network uses
-    /// [`extract_stored`](Self::extract_stored) instead, and networks that miss the requirements use
-    /// [`extract_owned`](Self::extract_owned).
-    pub fn extract<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<OutputGuard<'_>> {
-        self.ensure_borrowable(false)?;
-        let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target, false)?;
-        let keeps_storage = self.keeps_extracted_storage();
-        self._net.guard.output_borrowed.set(true);
-        Ok(OutputGuard {
-            mat,
-            keeps_storage,
-            network_borrowed: &self._net.guard.output_borrowed,
-            _extractor: PhantomData,
-        })
-    }
-    /// Borrows an output in the layout the producing layer wrote.
-    ///
-    /// Native extraction converts packed, FP16, BF16 and INT8 storage to FP32 unless the
-    /// caller asks for stored storage, so this form keeps the element width in
-    /// [`TensorInfo`](crate::TensorInfo) and the caller names the scalar format through
-    /// [`OutputGuard::to_f32_typed`] or [`OutputGuard::to_i8`].
-    ///
-    /// ```
-    /// let net = ncnn_rust::Net::builder()?.threads(1)?.load_bytes(
-    ///     "7767517\n2 2\nInput input 0 1 input\nQuantize quantize 1 1 input stored 0=1\n",
-    ///     &1.0f32.to_le_bytes(),
-    /// )?;
-    /// let mut extractor = net.extractor()?;
-    /// extractor.input("input", ncnn_rust::Mat::from_f32(&[0.4, -0.6], &[2])?)?;
-    /// let bytes = {
-    ///     let guard = extractor.extract_stored("stored")?;
-    ///     assert_eq!(guard.info().elemsize, 1);
-    ///     guard.to_i8()?
-    /// };
-    /// assert_eq!(bytes, [0, -1]);
-    /// # Ok::<(), ncnn_rust::Error>(())
-    /// ```
-    pub fn extract_stored<'a>(
+    /// loading, no raw handle exports, and one live extractor. [`TensorWidth::Stored`] keeps the
+    /// width the producing layer wrote, which is what a device network can borrow; networks that
+    /// miss the requirements use [`extract_owned`](Self::extract_owned).
+    pub fn extract<'a>(
         &mut self,
         endpoint: impl Into<Endpoint<'a>>,
+        width: TensorWidth,
     ) -> Result<OutputGuard<'_>> {
-        self.ensure_borrowable(true)?;
+        self.ensure_borrowable(width == TensorWidth::Stored)?;
         let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target, true)?;
+        let mat = self.extract_native(&target, width == TensorWidth::Stored)?;
         let keeps_storage = self.keeps_extracted_storage();
         self._net.guard.output_borrowed.set(true);
         Ok(OutputGuard {
@@ -471,16 +454,6 @@ impl Extractor<'_> {
             network_borrowed: &self._net.guard.output_borrowed,
             _extractor: PhantomData,
         })
-    }
-    /// Returns stored storage with independent ownership.
-    ///
-    /// The result keeps the element width the producing layer wrote, so
-    /// [`Mat::to_f32_typed`](crate::Mat::to_f32_typed) or [`Mat::to_i8`](crate::Mat::to_i8)
-    /// applies. Use this form when the network may run more requests before the tensor is read.
-    pub fn extract_stored_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<Mat> {
-        let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target, true)?;
-        self.own_extracted(mat)
     }
     /// Returns one output as an independently owned tensor without copying it.
     ///
@@ -503,13 +476,17 @@ impl Extractor<'_> {
     /// )?;
     /// let mut extractor = net.extractor()?;
     /// extractor.input("input", ncnn_rust::Mat::from_f32(&[-1.0, 2.0], &[2])?)?;
-    /// let output = extractor.extract_mat("output")?;
+    /// let output = extractor.extract_mat("output", ncnn_rust::TensorWidth::Fp32)?;
     /// assert_eq!(output.to_f32()?, [0.0, 2.0]);
     /// # Ok::<(), ncnn_rust::Error>(())
     /// ```
-    pub fn extract_mat<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<Mat> {
+    pub fn extract_mat<'a>(
+        &mut self,
+        endpoint: impl Into<Endpoint<'a>>,
+        width: TensorWidth,
+    ) -> Result<Mat> {
         let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target, false)?;
+        let mat = self.extract_native(&target, width == TensorWidth::Stored)?;
         self.own_extracted(mat)
     }
     /// Returns validated values with independent owned storage.
@@ -517,7 +494,7 @@ impl Extractor<'_> {
     /// This is the form that works for every network, including device networks, networks with
     /// exported raw handles and networks with more than one live extractor. It converts the output
     /// to FP32 and copies it, so a quantized model needs
-    /// [`extract_stored_owned`](Self::extract_stored_owned).
+    /// [`extract_mat`](Self::extract_mat) with [`TensorWidth::Stored`].
     ///
     /// Each call allocates the value vector and frees it again. [`extract_into`](Self::extract_into)
     /// appends to a caller buffer instead and allocates no data buffer,
@@ -531,28 +508,14 @@ impl Extractor<'_> {
             values: mat.to_f32()?,
         })
     }
-    /// Replaces a caller vector with the output and returns its shape metadata.
-    ///
-    /// The vector keeps its capacity across calls, which is what makes the steady-state path
-    /// allocation-free. A failure leaves the vector empty because the replacement starts before the
-    /// native copy.
-    pub fn extract_into<'a>(
-        &mut self,
-        endpoint: impl Into<Endpoint<'a>>,
-        buffer: &mut Vec<f32>,
-    ) -> Result<crate::TensorInfo> {
-        let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target, false)?;
-        let info = mat.info();
-        mat.to_f32_into(buffer)?;
-        Ok(info)
-    }
     /// Appends the output to a caller vector and returns its shape metadata.
     ///
-    /// Existing values stay in place, so several outputs concatenate in call order. A failure
-    /// leaves the vector as it was before the call, which makes this the building block behind
-    /// [`Net::infer_into`](crate::Net::infer_into).
-    pub fn extract_append<'a>(
+    /// The vector keeps its capacity across calls, which is what makes the steady-state path
+    /// allocation-free, and existing values stay in place so several outputs concatenate in call
+    /// order. A failure leaves the vector exactly as it was, which is why
+    /// [`Net::infer_into`](crate::Net::infer_into) builds its ranges on this form. A caller that
+    /// wants the output alone clears the vector first.
+    pub fn extract_into<'a>(
         &mut self,
         endpoint: impl Into<Endpoint<'a>>,
         buffer: &mut Vec<f32>,
@@ -581,7 +544,7 @@ impl Extractor<'_> {
         mut consume: impl FnMut(&str, &OutputGuard<'_>) -> Result<()>,
     ) -> Result<()> {
         for name in names {
-            let output = self.extract(*name)?;
+            let output = self.extract(*name, TensorWidth::Fp32)?;
             consume(name, &output)?;
         }
         Ok(())
@@ -601,20 +564,20 @@ impl Extractor<'_> {
 ///
 /// ```compile_fail
 /// fn reuse(ex: &mut ncnn_rust::Extractor<'_>) {
-///     let output = ex.extract("output").unwrap();
-///     ex.extract("output").unwrap();
+///     let output = ex.extract("output", ncnn_rust::TensorWidth::Fp32).unwrap();
+///     ex.extract("output", ncnn_rust::TensorWidth::Fp32).unwrap();
 ///     println!("{:?}", output.as_f32_slice());
 /// }
 /// ```
 /// ```compile_fail
 /// fn escape(net: &ncnn_rust::Net) -> ncnn_rust::OutputGuard<'_> {
 ///     let mut ex = net.extractor().unwrap();
-///     ex.extract("output").unwrap()
+///     ex.extract("output", ncnn_rust::TensorWidth::Fp32).unwrap()
 /// }
 /// ```
 /// ```compile_fail
 /// fn escape_slice(ex: &mut ncnn_rust::Extractor<'_>) {
-///     let output = ex.extract("output").unwrap();
+///     let output = ex.extract("output", ncnn_rust::TensorWidth::Fp32).unwrap();
 ///     let values = output.as_f32_slice().unwrap();
 ///     drop(output);
 ///     println!("{}", values[0]);
@@ -628,7 +591,7 @@ impl Extractor<'_> {
 /// ```compile_fail
 /// fn destroy_extractor(net: &ncnn_rust::Net) {
 ///     let mut ex = net.extractor().unwrap();
-///     let _output = ex.extract("output").unwrap();
+///     let _output = ex.extract("output", ncnn_rust::TensorWidth::Fp32).unwrap();
 ///     drop(ex); // The unused guard must still release its handle first.
 /// }
 /// ```
