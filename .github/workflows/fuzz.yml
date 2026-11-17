@@ -44,6 +44,13 @@ jobs:
           python3 tools/fetch-ncnn.py
           python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
 
+      # Build every target first, so a compile error fails the job immediately instead of after
+      # the first target has burned its two timed minutes.
+      - name: Build the fuzz targets
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo +nightly fuzz build --fuzz-dir fuzz
+
       - name: Run the fuzz targets
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib

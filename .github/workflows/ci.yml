@@ -161,6 +161,14 @@ jobs:
           test ! -e "$RUNNER_TEMP/rejected"
           test ! -e "$RUNNER_TEMP/rejected.partial"
 
+      # The fuzz targets live in their own workspace, so `cargo test` never compiles them and a
+      # renamed loader would surface only in the nightly run.
+      - name: Check the fuzz targets
+        if: runner.os == 'Linux'
+        env:
+          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins
+
       # A second pass catches state that only breaks after the first one.
       - name: Repeat the suite
         if: runner.os == 'Linux'

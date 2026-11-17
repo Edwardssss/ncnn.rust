@@ -114,7 +114,7 @@ GitHub-hosted runners cover these configurations without additional hardware:
 
 | Configuration | Runner | What the job proves |
 |---|---|---|
-| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, the workspace suite twice, the CPU examples, `cargo doc -D warnings`, generated model fixtures against a native reference, package verification, and `tools/install-sdk.py` against an archive the job packs itself |
+| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, the workspace suite twice, the CPU examples, `cargo doc -D warnings`, generated model fixtures against a native reference, package verification, `tools/install-sdk.py` against an archive the job packs itself, and `cargo check` of the fuzz targets |
 | Windows x86-64 CPU | `windows-latest` | MSVC build, workspace tests, example, package verification |
 | Linux ARM64 CPU | `ubuntu-24.04-arm` | Native workspace tests |
 | macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
