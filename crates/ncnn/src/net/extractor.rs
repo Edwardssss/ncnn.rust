@@ -507,7 +507,7 @@ impl Extractor<'_> {
         let target = self.resolve(endpoint.into(), true)?;
         let mat = self.extract_native(&target, false)?;
         let info = mat.info();
-        mat.append_f32_to(buffer)?;
+        mat.to_f32_into(buffer)?;
         Ok(info)
     }
     /// Exposes advanced access and permanently disables this extractor's guards.

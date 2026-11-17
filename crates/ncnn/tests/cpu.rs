@@ -285,9 +285,11 @@ fn cpu_contracts() -> ncnn::Result<()> {
     let allocation = reusable.as_ptr();
     padded.to_f32_into(&mut reusable)?;
     assert_eq!(reusable, [1., 2., 3., 4., 5., 6.]);
+    // `to_f32_into` appends, so a caller that wants one tensor clears the vector first.
+    reusable.clear();
     a.to_f32_into(&mut reusable)?;
     assert_eq!(reusable.as_ptr(), allocation);
-    padded.append_f32_to(&mut reusable)?;
+    padded.to_f32_into(&mut reusable)?;
     assert_eq!(reusable, [1., 2., 3., 4., 1., 2., 3., 4., 5., 6.]);
     let mut wrong = [42.; 3];
     assert!(a.copy_to_f32(&mut wrong).is_err());

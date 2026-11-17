@@ -62,7 +62,8 @@ Behaviour that has changed between ncnn releases without a C API change:
   `load_model_file(path)` and `load_model_reader(&reader)` become
   `load_model(WeightSource::{File, Reader})`. `From` conversions keep `load_param("text")` and
   `load_model(&bytes)` compiling as before, and `Net::load(params, weights)` loads both stages at
-  once.
+  once. `Mat::append_f32_to` is gone: `Mat::to_f32_into` appends now, and a caller that wants one
+  tensor alone clears the vector first.
 - **Patch releases** never change the pinned ncnn release, the public API or the storage contracts.
 
 ## Compatibility with the native library

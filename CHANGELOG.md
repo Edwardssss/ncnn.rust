@@ -53,6 +53,9 @@ library upgrade is a minor change of this crate.
   and `Net::load_model_reader`. Their capability moves into `ParamSource` and `WeightSource`, which
   also removes the four near-identical parameter loaders and the three weight loaders.
   `Net::load_model_file_native` stays separate because mapped loading changes the lifetime contract.
+- `Mat::append_f32_to`, whose behaviour `Mat::to_f32_into` now has: it appends, leaves the vector
+  untouched on failure, and keeps the capacity, so the replace form was the special case a caller
+  writes with `clear()`.
 
 ## 0.3.0 - 2026-11-11
 

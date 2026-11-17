@@ -177,6 +177,24 @@ pub(crate) enum Provenance {
 
 /// An owned tensor handle released through the native allocator.
 ///
+/// # Surface
+///
+/// The methods group by capability, and each group answers one question:
+///
+/// | Group | Methods |
+/// |---|---|
+/// | Construction | `from_f32`, `from_f32_batch`, `from_typed`, `from_i8`, `from_pixels`, `from_external` |
+/// | Typed access | `info`, `to_f32`, `to_f32_typed`, `to_i8`, `copy_to_f32`, `to_f32_into`, `as_f32_slice`, `channel_f32` |
+/// | Layout | `shape`, `total`, `is_empty`, `flatten`, `with_packing`, `deep_clone`, `reshape`, `into_reshape`, `reshape_view` |
+/// | Sub views | `channel`, `channel_range`, `depth`, `depth_range`, `column_range`, `row_range`, `batch`, `batch_range` |
+/// | Values in place | `fill`, `normalized`, `normalize_in_place`, `into_normalized` |
+/// | Pixels | `to_pixels`, `to_pixels_resize`, `from_pixels` |
+/// | Borders | `copy_make_border`, `copy_cut_border`, `copy_make_border_3d`, `copy_cut_border_3d` |
+/// | Raw escape | `as_raw`, `into_raw` |
+///
+/// The consuming forms (`into_reshape`, `into_normalized`) exist because they keep storage the
+/// caller already owns; the borrowing forms do the same work behind a copy.
+///
 /// # Thread affinity
 ///
 /// A tensor belongs to the thread that created it: the handle is not `Send` or `Sync` because
@@ -566,21 +584,13 @@ impl Mat {
             ))
         }
     }
-    /// Reuses vector capacity and replaces its logical FP32 values.
-    /// A layout error leaves the vector unchanged; a failed native copy empties it.
+    /// Appends the logical FP32 values to a vector that keeps its capacity.
+    ///
+    /// Existing values stay in place, so several tensors concatenate in call order. A layout error
+    /// or a failed native copy leaves the vector exactly as it was, and the capacity survives, which
+    /// is what makes a steady-state loop allocation-free. A caller that wants this tensor alone
+    /// clears the vector first.
     pub fn to_f32_into(&self, out: &mut Vec<f32>) -> Result<()> {
-        let count = self.f32_copy_count()?;
-        out.clear();
-        out.reserve(count);
-        unsafe {
-            status(sys::ncnn_rs_mat_read_f32(self.raw, out.as_mut_ptr(), count))?;
-            // The native copy initializes every element before the length grows.
-            out.set_len(count);
-        }
-        Ok(())
-    }
-    /// Appends logical FP32 values without an intermediate tensor/vector copy.
-    pub fn append_f32_to(&self, out: &mut Vec<f32>) -> Result<()> {
         let count = self.f32_copy_count()?;
         let start = out.len();
         let end = start
