@@ -1,7 +1,9 @@
 use ncnn::alloc::Pool;
 use ncnn::{sys, Mat, Options, ParamDict};
 use ncnn_rust as ncnn;
+use ncnn_rust::ParamSource;
 use ncnn_rust::TensorWidth;
+use ncnn_rust::WeightSource;
 
 pub fn run() -> ncnn::Result<()> {
     assert!(ncnn::cpu::physical_core_count()? > 0);
@@ -35,7 +37,7 @@ pub fn run() -> ncnn::Result<()> {
                     net.load_param(
                         "7767517\n2 2\nInput input 0 1 input\nReLU relu 1 1 input output\n",
                     )?;
-                    net.load_model(&[])?;
+                    net.load_model(WeightSource::EMPTY)?;
                     let mut ex = net.extractor()?;
                     ex.input("input", Mat::from_f32(&[-2., 3.], &[2])?)?;
                     let output = ex.extract_owned("output")?.values;
@@ -98,7 +100,7 @@ pub fn run() -> ncnn::Result<()> {
     eprintln!("advanced: graphs");
     let mut detector = ncnn::Net::new()?;
     detector.load_param("7767517\n4 4\nInput loc 0 1 loc\nInput score 0 1 score\nInput prior 0 1 prior\nDetectionOutput detect 3 1 loc score prior detections 0=2 4=0.5\n")?;
-    detector.load_model(&[])?;
+    detector.load_model(WeightSource::EMPTY)?;
     let mut de = detector.extractor()?;
     de.input("loc", Mat::from_f32(&[0.; 4], &[4])?)?;
     de.input("score", Mat::from_f32(&[0.1, 0.9], &[2])?)?;
@@ -177,8 +179,8 @@ pub fn run() -> ncnn::Result<()> {
             binary.extend_from_slice(&v.to_le_bytes());
         }
         let mut net = ncnn::Net::new()?;
-        net.load_param_binary(&binary)?;
-        net.load_model(&[])?;
+        net.load_param(ParamSource::Binary(&binary))?;
+        net.load_model(WeightSource::EMPTY)?;
         let input = Mat::from_f32(&[7., 9.], &[2])?;
         let mut ex = net.extractor()?;
         ex.input(0, input.deep_clone()?)?;

@@ -357,15 +357,15 @@ fn models_load_from_files_and_readers() {
     let text = DataReader::from_bytes(PARAM.as_bytes()).unwrap();
     let empty = DataReader::from_bytes(&[]).unwrap();
     let mut net = Net::new().unwrap();
-    net.load_param_reader(&text).unwrap();
-    net.load_model_reader(&empty).unwrap();
+    net.load_param(&text).unwrap();
+    net.load_model(&empty).unwrap();
     run(&net);
 
     // Reader over a file, which stays open until the handle drops.
     let file = DataReader::from_file(&parameters).unwrap();
     let mut net = Net::new().unwrap();
-    net.load_param_reader(&file).unwrap();
-    net.load_model_reader(&empty).unwrap();
+    net.load_param(&file).unwrap();
+    net.load_model(&empty).unwrap();
     run(&net);
     drop(file);
 
@@ -375,9 +375,9 @@ fn models_load_from_files_and_readers() {
 
     // Failures are reported in order: parameters first, then weights.
     let mut broken = Net::new().unwrap();
-    assert!(broken.load_param_reader(&empty).is_err());
+    assert!(broken.load_param(&empty).is_err());
     assert!(
-        broken.load_model_reader(&empty).is_err(),
+        broken.load_model(&empty).is_err(),
         "weights need parameters first"
     );
     assert!(

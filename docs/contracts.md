@@ -75,10 +75,10 @@ Low-copy describes omission of the wrapper's final deep clone. A null native all
 
 Model files are trusted native input. The `DataReader` handle either owns a copy of the bytes or
 owns an open file, clamps every read to the bytes that remain, and scans parameter text, which is how
-`load_param_reader` and `load_model_reader` reach the same native parsers as the byte APIs. The file
-reader keeps the file open until it drops. `load_param_file` and `load_model_file` hand the path to
-the native stdio loaders, so a model never passes through a Rust buffer and the peak allocation stays
-at the per-layer copies ncnn keeps. `load_model_file_native` opts into mapped loading and stays
+`ParamSource::Reader` and `WeightSource::Reader` reach the same native parsers as the byte sources,
+and the file reader keeps the file open until it drops. `ParamSource::File` and `WeightSource::File`
+hand the path to the native stdio loaders, so a model never passes through a Rust buffer and the peak
+allocation stays at the per-layer copies ncnn keeps. `load_model_file_native` opts into mapped loading and stays
 unsafe because the mapping has to outlive the network. Safe file APIs use Rust paths and file reads on both platforms. The explicit unsafe `load_model_file_native` method calls the native narrow/wide path API and honors mapped loading; the caller keeps the file contents and length stable until the network is cleared or destroyed. Native allocation failure may terminate the process in upstream allocation paths.
 
 ## Borrowed inputs and zero copy

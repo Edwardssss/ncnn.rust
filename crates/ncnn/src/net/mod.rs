@@ -74,6 +74,138 @@ impl<'a, 'view: 'a> From<&'a crate::MatView<'view>> for Input<'a> {
     }
 }
 
+/// Where a network reads its parameters from.
+///
+/// A text or binary source keeps the parameters in memory, a file source lets the native stdio
+/// loader read the path, and a reader source serves an archive or an embedded asset.
+pub enum ParamSource<'a> {
+    /// Text parameters, starting with the `7767517` magic line.
+    Text(&'a str),
+    /// Parameters in the binary form `ncnn2mem` writes, which needs no text parsing.
+    Binary(&'a [u8]),
+    /// A file the native stdio loader opens.
+    File(&'a Path),
+    /// A reader that owns its bytes or file.
+    Reader(&'a crate::DataReader),
+}
+
+impl<'a> ParamSource<'a> {
+    fn prepare(self) -> Result<PreparedParams<'a>> {
+        Ok(match self {
+            Self::Text(text) => PreparedParams::Text(CString::new(text)?),
+            Self::Binary(data) => PreparedParams::Binary(data),
+            Self::File(path) => PreparedParams::File(utf8_path(path)?),
+            Self::Reader(reader) => PreparedParams::Reader(reader),
+        })
+    }
+}
+
+impl<'a> From<&'a str> for ParamSource<'a> {
+    fn from(text: &'a str) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl<'a> From<&'a [u8]> for ParamSource<'a> {
+    fn from(data: &'a [u8]) -> Self {
+        Self::Binary(data)
+    }
+}
+
+impl<'a> From<&'a Path> for ParamSource<'a> {
+    fn from(path: &'a Path) -> Self {
+        Self::File(path)
+    }
+}
+
+impl<'a> From<&'a std::path::PathBuf> for ParamSource<'a> {
+    fn from(path: &'a std::path::PathBuf) -> Self {
+        Self::File(path)
+    }
+}
+
+impl<'a> From<&'a crate::DataReader> for ParamSource<'a> {
+    fn from(reader: &'a crate::DataReader) -> Self {
+        Self::Reader(reader)
+    }
+}
+
+/// Where a network reads its weights from.
+///
+/// Weights have no text form, so a string source names a file.
+pub enum WeightSource<'a> {
+    /// Weight bytes in declaration order.
+    Bytes(&'a [u8]),
+    /// A file the native stdio loader opens.
+    File(&'a Path),
+    /// A reader that owns its bytes or file.
+    Reader(&'a crate::DataReader),
+}
+
+impl WeightSource<'_> {
+    /// No weights, which is what a graph whose layers need none loads.
+    pub const EMPTY: WeightSource<'static> = WeightSource::Bytes(&[]);
+}
+
+impl<'a> WeightSource<'a> {
+    fn prepare(self) -> Result<PreparedWeights<'a>> {
+        Ok(match self {
+            Self::Bytes(data) => PreparedWeights::Bytes(data),
+            Self::File(path) => PreparedWeights::File(utf8_path(path)?),
+            Self::Reader(reader) => PreparedWeights::Reader(reader),
+        })
+    }
+}
+
+impl<'a> From<&'a [u8]> for WeightSource<'a> {
+    fn from(data: &'a [u8]) -> Self {
+        Self::Bytes(data)
+    }
+}
+
+impl<'a> From<&'a Vec<u8>> for WeightSource<'a> {
+    fn from(data: &'a Vec<u8>) -> Self {
+        Self::Bytes(data)
+    }
+}
+
+impl<'a> From<&'a Path> for WeightSource<'a> {
+    fn from(path: &'a Path) -> Self {
+        Self::File(path)
+    }
+}
+
+impl<'a> From<&'a std::path::PathBuf> for WeightSource<'a> {
+    fn from(path: &'a std::path::PathBuf) -> Self {
+        Self::File(path)
+    }
+}
+
+impl<'a> From<&'a str> for WeightSource<'a> {
+    fn from(path: &'a str) -> Self {
+        Self::File(Path::new(path))
+    }
+}
+
+impl<'a> From<&'a crate::DataReader> for WeightSource<'a> {
+    fn from(reader: &'a crate::DataReader) -> Self {
+        Self::Reader(reader)
+    }
+}
+
+enum PreparedParams<'a> {
+    Text(CString),
+    Binary(&'a [u8]),
+    File(CString),
+    Reader(&'a crate::DataReader),
+}
+
+enum PreparedWeights<'a> {
+    Bytes(&'a [u8]),
+    File(CString),
+    Reader(&'a crate::DataReader),
+}
+
 /// Converts a filesystem path into the UTF-8 form the native loaders accept.
 fn utf8_path(path: &Path) -> Result<CString> {
     let text = path
@@ -270,8 +402,8 @@ impl NetBuilder {
         weights: impl AsRef<Path>,
     ) -> Result<Net> {
         let mut net = self.configured_net()?;
-        net.load_param_file(parameters)?;
-        net.load_model_file(weights)?;
+        net.load_param(ParamSource::File(parameters.as_ref()))?;
+        net.load_model(WeightSource::File(weights.as_ref()))?;
         Ok(net)
     }
     /// Loads text parameters and weights from memory.
@@ -526,61 +658,41 @@ impl Net {
             .set(self.guard.low_copy.get() && options.low_copy.get());
         Ok(())
     }
-    /// Replaces the graph from text parameters.
+    /// Replaces the graph from parameter data, a file or a reader.
     ///
-    /// The text form begins with the `7767517` magic line. Loading releases the previous layers,
-    /// weights and cached blobs first, and a failure leaves the network empty instead of partially
-    /// loaded, so weights load again before the next extractor. Weights load afterwards through
-    /// [`load_model`](Self::load_model).
+    /// [`ParamSource::Text`] begins with the `7767517` magic line and [`ParamSource::Binary`] carries
+    /// the form `ncnn2mem` writes, which avoids parsing text at start-up. Loading releases the
+    /// previous layers, weights and cached blobs first, and a failure leaves the network empty
+    /// instead of partially loaded, so weights load again before the next extractor. Weights load
+    /// afterwards through [`load_model`](Self::load_model), or in the same call through
+    /// [`load`](Self::load).
     ///
-    /// Loading needs mutable access, which is what keeps live extractors and resolved endpoints out
-    /// of the replaced graph.
-    pub fn load_param(&mut self, text: &str) -> Result<()> {
-        let text = CString::new(text)?;
+    /// Loading needs mutable access, which keeps live extractors and resolved endpoints out of the
+    /// replaced graph.
+    pub fn load_param<'a>(&mut self, source: impl Into<ParamSource<'a>>) -> Result<()> {
+        // A source that cannot be prepared, such as text with an interior null, leaves the loaded
+        // graph alone.
+        let prepared = source.into().prepare()?;
         self.clear();
         let result = unsafe {
-            status_at(
-                "load parameters",
-                sys::ncnn_net_load_param_memory(self.raw, text.as_ptr()),
-            )
-        };
-        self.loaded = result.is_ok();
-        if result.is_err() {
-            self.clear();
-        }
-        result
-    }
-    /// Reads the text form from a file with the native stdio loader.
-    ///
-    /// The native parser reads the file directly, so the parameter text never becomes a Rust
-    /// string. A path that is not valid UTF-8 is rejected, because the loader receives UTF-8.
-    pub fn load_param_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        let path = utf8_path(path.as_ref())?;
-        self.clear();
-        let result = unsafe {
-            status_at(
-                "load parameters",
-                sys::ncnn_rs_net_load_file(self.raw, path.as_ptr(), 0, 0),
-            )
-        };
-        self.loaded = result.is_ok();
-        if result.is_err() {
-            self.clear();
-        }
-        result
-    }
-    /// Loads parameters in the binary form that `ncnn2mem` writes.
-    ///
-    /// This path avoids parsing text at start-up. It clears the previous graph the same way
-    /// [`load_param`](Self::load_param) does, and weights still load through
-    /// [`load_model`](Self::load_model).
-    pub fn load_param_binary(&mut self, data: &[u8]) -> Result<()> {
-        self.clear();
-        let result = unsafe {
-            status_at(
-                "load parameters",
-                sys::ncnn_rs_load_bytes(self.raw, data.as_ptr(), data.len(), 0),
-            )
+            match prepared {
+                PreparedParams::Text(text) => status_at(
+                    "load parameters",
+                    sys::ncnn_net_load_param_memory(self.raw, text.as_ptr()),
+                ),
+                PreparedParams::Binary(data) => status_at(
+                    "load parameters",
+                    sys::ncnn_rs_load_bytes(self.raw, data.as_ptr(), data.len(), 0),
+                ),
+                PreparedParams::File(path) => status_at(
+                    "load parameters",
+                    sys::ncnn_rs_net_load_file(self.raw, path.as_ptr(), 0, 0),
+                ),
+                PreparedParams::Reader(reader) => status_at(
+                    "load parameters",
+                    sys::ncnn_net_load_param_datareader(self.raw, reader.as_raw()),
+                ),
+            }
         };
         self.loaded = result.is_ok();
         if result.is_err() {
@@ -590,21 +702,36 @@ impl Net {
     }
     /// Loads weights for the current parameters, once.
     ///
-    /// ncnn reads each layer's weights in declaration order, so the buffer has to match the loaded
-    /// parameter text. Reload parameters before loading different weights. Detached outputs keep
-    /// their own storage after a later reload; borrowed ones do not, which the mutable borrow
-    /// already prevents.
-    pub fn load_model(&mut self, data: &[u8]) -> Result<()> {
+    /// ncnn reads each layer's weights in declaration order, so the source has to match the loaded
+    /// parameters. Reload parameters before loading different weights. Detached outputs keep their
+    /// own storage after a later reload; borrowed ones do not, which the mutable borrow already
+    /// prevents.
+    ///
+    /// A file source keeps the weights out of Rust memory, so the peak allocation stays at the
+    /// per-layer copies ncnn keeps. [`load_model_file_native`](Self::load_model_file_native)
+    /// additionally maps the file instead of reading it.
+    pub fn load_model<'a>(&mut self, source: impl Into<WeightSource<'a>>) -> Result<()> {
         if !self.loaded || self.ready {
             return Err(Error::invalid(
                 "Load parameters before loading weights once",
             ));
         }
+        let prepared = source.into().prepare()?;
         let result = unsafe {
-            status_at(
-                "load weights",
-                sys::ncnn_rs_load_bytes(self.raw, data.as_ptr(), data.len(), 1),
-            )
+            match prepared {
+                PreparedWeights::Bytes(data) => status_at(
+                    "load weights",
+                    sys::ncnn_rs_load_bytes(self.raw, data.as_ptr(), data.len(), 1),
+                ),
+                PreparedWeights::File(path) => status_at(
+                    "load weights",
+                    sys::ncnn_rs_net_load_file(self.raw, path.as_ptr(), 1, 0),
+                ),
+                PreparedWeights::Reader(reader) => status_at(
+                    "load weights",
+                    sys::ncnn_net_load_model_datareader(self.raw, reader.as_raw()),
+                ),
+            }
         };
         self.ready = result.is_ok();
         if result.is_err() {
@@ -612,30 +739,17 @@ impl Net {
         }
         result
     }
-    /// Reads the weights from a file with the native stdio loader.
+    /// Loads parameters and weights in one call.
     ///
-    /// The native loader reads the file itself, so the weights never pass through a Rust buffer and
-    /// the peak allocation stays at the per-layer copies ncnn keeps. Requirements match
-    /// [`load_model`](Self::load_model). [`load_model_file_native`](Self::load_model_file_native)
-    /// additionally maps the file instead of reading it.
-    pub fn load_model_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        if !self.loaded || self.ready {
-            return Err(Error::invalid(
-                "Load parameters before loading weights once",
-            ));
-        }
-        let path = utf8_path(path.as_ref())?;
-        let result = unsafe {
-            status_at(
-                "load weights",
-                sys::ncnn_rs_net_load_file(self.raw, path.as_ptr(), 1, 0),
-            )
-        };
-        self.ready = result.is_ok();
-        if result.is_err() {
-            self.clear();
-        }
-        result
+    /// This is the two-stage pair above without the intermediate state: the call either leaves a
+    /// network that can extract or an empty one, and it is what [`NetBuilder`] uses.
+    pub fn load<'a>(
+        &mut self,
+        params: impl Into<ParamSource<'a>>,
+        weights: impl Into<WeightSource<'a>>,
+    ) -> Result<()> {
+        self.load_param(params)?;
+        self.load_model(weights)
     }
     /// Loads weights through the native path API, including configured memory mapping.
     ///
@@ -746,46 +860,6 @@ impl Net {
         let mut value = 0;
         unsafe { status(sys::ncnn_rs_option_get(option, key as i32, &mut value))? };
         Ok(value)
-    }
-    /// Loads text parameters through a data reader.
-    ///
-    /// The reader lets an application load from an archive or an embedded asset without arranging a
-    /// whole file. The native parser reads it sequentially, so weights need a second reader.
-    pub fn load_param_reader(&mut self, reader: &crate::DataReader) -> Result<()> {
-        self.clear();
-        let result = unsafe {
-            status_at(
-                "load parameters",
-                sys::ncnn_net_load_param_datareader(self.raw, reader.as_raw()),
-            )
-        };
-        self.loaded = result.is_ok();
-        if result.is_err() {
-            self.clear();
-        }
-        result
-    }
-    /// Loads weights through a data reader.
-    ///
-    /// Requirements match [`load_model`](Self::load_model): parameters load first, and the reader
-    /// has to start at the weights block because the native parser reads it sequentially.
-    pub fn load_model_reader(&mut self, reader: &crate::DataReader) -> Result<()> {
-        if !self.loaded || self.ready {
-            return Err(Error::invalid(
-                "Load parameters before loading weights once",
-            ));
-        }
-        let result = unsafe {
-            status_at(
-                "load weights",
-                sys::ncnn_net_load_model_datareader(self.raw, reader.as_raw()),
-            )
-        };
-        self.ready = result.is_ok();
-        if result.is_err() {
-            self.clear();
-        }
-        result
     }
     /// Registers a native custom-layer factory for a layer type index.
     ///

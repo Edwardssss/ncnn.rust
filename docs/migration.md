@@ -57,7 +57,12 @@ Behaviour that has changed between ncnn releases without a C API change:
   `Extractor::inputs` and `Extractor::outputs_with` are gone as well: submit each input with
   `input` and extract each output with `extract`, which keeps the error policy in the caller's loop.
   `OutputGuard::detach` is gone; `into_mat` consumes the guard and copies only when it cannot own
-  the storage.
+  the storage. The loading methods take a source: `load_param_file(path)`, `load_param_binary(data)`
+  and `load_param_reader(&reader)` become `load_param(ParamSource::{File, Binary, Reader})`, and
+  `load_model_file(path)` and `load_model_reader(&reader)` become
+  `load_model(WeightSource::{File, Reader})`. `From` conversions keep `load_param("text")` and
+  `load_model(&bytes)` compiling as before, and `Net::load(params, weights)` loads both stages at
+  once.
 - **Patch releases** never change the pinned ncnn release, the public API or the storage contracts.
 
 ## Compatibility with the native library

@@ -35,6 +35,10 @@ library upgrade is a minor change of this crate.
 
 - `Extractor::extract_owned` is now the sugar form of `extract_into`: it allocates the vector and
   delegates, so the FP32 conversion has one implementation instead of two.
+- The loading methods take a source instead of a parameter shape. `load_param` accepts
+  `ParamSource::{Text, Binary, File, Reader}`, `load_model` accepts
+  `WeightSource::{Bytes, File, Reader}` plus `WeightSource::EMPTY`, and `Net::load` runs both stages
+  in one call. `From` conversions keep `load_param("…")` and `load_model(&bytes)` unchanged.
 
 ### Removed
 
@@ -45,6 +49,10 @@ library upgrade is a minor change of this crate.
   the caller writes that loop and keeps the error policy visible.
 - `OutputGuard::detach`, the copying twin of `into_mat`: `into_mat` already copies when it cannot
   own the storage, so the guard keeps one ownership path.
+- `Net::load_param_file`, `Net::load_param_binary`, `Net::load_param_reader`, `Net::load_model_file`
+  and `Net::load_model_reader`. Their capability moves into `ParamSource` and `WeightSource`, which
+  also removes the four near-identical parameter loaders and the three weight loaders.
+  `Net::load_model_file_native` stays separate because mapped loading changes the lifetime contract.
 
 ## 0.3.0 - 2026-11-11
 

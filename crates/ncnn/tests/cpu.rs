@@ -1,5 +1,7 @@
 use ncnn_rust as ncnn;
+use ncnn_rust::ParamSource;
 use ncnn_rust::TensorWidth;
+use ncnn_rust::WeightSource;
 mod advanced;
 
 use ncnn::{
@@ -108,16 +110,16 @@ fn vulkan_contracts() -> ncnn::Result<()> {
             assert!(net.vulkan_device().is_none());
             net.set_vulkan_device(device.clone())?;
             net.configure(&options)?;
-            assert!(net.load_param_binary(&[]).is_err());
+            assert!(net.load_param(ParamSource::Binary(&[])).is_err());
             assert!(net.vulkan_device().is_some());
             net.load_param(
                 "7767517\n2 2\nInput input 0 1 input\nInnerProduct fc 1 1 input output 0=1 2=3\n",
             )?;
-            assert!(net.load_model(&[]).is_err());
+            assert!(net.load_model(WeightSource::EMPTY).is_err());
             assert!(net.extractor().is_err());
             assert!(net.vulkan_device().is_some());
             net.load_param(GRAPH)?;
-            net.load_model(&[])?;
+            net.load_model(WeightSource::EMPTY)?;
             assert!(net.set_vulkan_device(device.clone()).is_err());
             let mut ex = net.extractor()?;
             ex.input("a", a.deep_clone()?)?;
@@ -234,7 +236,7 @@ fn vulkan_contracts() -> ncnn::Result<()> {
     assert!(device.load_pipeline_cache(&cache).is_err());
     std::fs::remove_file(&cache)?;
     survivor.load_param(GRAPH)?;
-    survivor.load_model(&[])?;
+    survivor.load_model(WeightSource::EMPTY)?;
     assert_eq!(
         survivor.infer([("a", a.deep_clone()?), ("b", b.deep_clone()?)], &["sum"])?[0].values,
         reference
@@ -373,7 +375,7 @@ fn cpu_contracts() -> ncnn::Result<()> {
             assert_eq!(opt.get(CpuOption::Threads)?, 1);
             net.configure(&opt)?;
             net.load_param(GRAPH)?;
-            net.load_model(&[])?;
+            net.load_model(WeightSource::EMPTY)?;
             assert_eq!(net.input_names(), ["a", "b"]);
             assert_eq!(net.output_names(), ["sum", "product"]);
             assert!(net.configure(&opt).is_err());
@@ -390,7 +392,7 @@ fn cpu_contracts() -> ncnn::Result<()> {
         assert_eq!(detached.values, reference);
     }
     let mut net = Net::new()?;
-    assert!(net.load_param_binary(&[]).is_err());
+    assert!(net.load_param(ParamSource::Binary(&[])).is_err());
     assert!(net.extractor().is_err());
     let pool = Pool::new()?;
     assert!(!pool.as_raw().is_null());
@@ -484,7 +486,7 @@ fn cpu_contracts() -> ncnn::Result<()> {
         }
         custom
             .load_param("7767517\n2 2\nInput input 0 1 input\nRustCopy copy 1 1 input output\n")?;
-        custom.load_model(&[])?;
+        custom.load_model(WeightSource::EMPTY)?;
         let mut ex = custom.extractor()?;
         ex.input("input", a.deep_clone()?)?;
         assert!(ex.extract("output", TensorWidth::Fp32).is_err());
@@ -503,7 +505,7 @@ fn cpu_contracts() -> ncnn::Result<()> {
         )?;
         custom
             .load_param("7767517\n2 2\nInput input 0 1 input\nRustCopy copy 1 1 input output\n")?;
-        custom.load_model(&[])?;
+        custom.load_model(WeightSource::EMPTY)?;
         let raw = sys::ncnn_mat_create_1d_batch(2, 2, std::ptr::null_mut());
         for batch in 0..2 {
             let data = sys::ncnn_mat_get_batch_data(raw, batch).cast::<f32>();
@@ -663,7 +665,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     let _ =
         unsafe { native.load_model_file_native(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")) };
     native.load_param(graph)?;
-    native.load_model(&[])?;
+    native.load_model(WeightSource::EMPTY)?;
     assert!(matches!(
         native.extractor()?.extract("input", TensorWidth::Fp32),
         Err(ncnn::Error::Invalid(_))
@@ -676,7 +678,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
     let mut net = Net::new()?;
     net.configure(&options)?;
     net.load_param(graph)?;
-    net.load_model(&[])?;
+    net.load_model(WeightSource::EMPTY)?;
     let mut ex = net.extractor()?;
     ex.input("input", Mat::from_f32(&[-1., 2.], &[2])?)?;
     assert!(ex.extract(0, TensorWidth::Fp32).is_err());
@@ -835,9 +837,9 @@ fn callback_lifetimes() -> ncnn::Result<()> {
         }
         net.load_param(graph)?;
         if expected == -40 {
-            assert_eq!(native_code(net.load_model(&[])), Some(-1));
+            assert_eq!(native_code(net.load_model(WeightSource::EMPTY)), Some(-1));
         } else {
-            net.load_model(&[])?;
+            net.load_model(WeightSource::EMPTY)?;
             let mut ex = net.extractor()?;
             ex.input("input", input.deep_clone()?)?;
             assert_eq!(native_code(ex.extract_owned("output")), Some(expected));
@@ -872,7 +874,7 @@ fn callback_lifetimes() -> ncnn::Result<()> {
         net.load_param(
             "7767517\n3 4\nInput a 0 1 a\nInput b 0 1 b\nPartial partial 2 2 a b x y\n",
         )?;
-        net.load_model(&[])?;
+        net.load_model(WeightSource::EMPTY)?;
         let mut ex = net.extractor()?;
         ex.input("a", input.deep_clone()?)?;
         ex.input("b", input.deep_clone()?)?;
@@ -893,7 +895,7 @@ fn callback_lifetimes() -> ncnn::Result<()> {
             net.register_custom_layer("Callback", Some(create_copy), Some(destroy_copy), context)?;
         }
         net.load_param("7767517\n3 3\nInput input 0 1 input\nCallback first 1 1 input intermediate\nCallback second 1 1 intermediate output\n")?;
-        net.load_model(&[])?;
+        net.load_model(WeightSource::EMPTY)?;
         let result = {
             let mut ex = net.extractor()?;
             ex.input("input", input.deep_clone()?)?;
@@ -928,7 +930,7 @@ fn callback_lifetimes() -> ncnn::Result<()> {
                         )?;
                     }
                     net.load_param(graph)?;
-                    net.load_model(&[])?;
+                    net.load_model(WeightSource::EMPTY)?;
                     let mut ex = net.extractor()?;
                     ex.input("input", Mat::from_f32(&[worker as f32, 5.], &[2])?)?;
                     ex.extract_owned("output")?.values
@@ -1012,7 +1014,7 @@ fn resolved_endpoints_are_bound_to_the_loaded_graph() -> ncnn::Result<()> {
     let mut net = Net::new()?;
     assert!(net.resolve_blob("a").is_err());
     net.load_param(GRAPH)?;
-    net.load_model(&[])?;
+    net.load_model(WeightSource::EMPTY)?;
     let input = net.resolve_blob("a")?;
     let output = net.resolve_blob("sum")?;
     assert!(net.resolve_blob("missing").is_err());
@@ -1044,7 +1046,7 @@ fn resolved_endpoints_are_bound_to_the_loaded_graph() -> ncnn::Result<()> {
     net.clear();
     assert!(net.resolve_blob("a").is_err());
     net.load_param(GRAPH)?;
-    net.load_model(&[])?;
+    net.load_model(WeightSource::EMPTY)?;
     let mut ex = net.extractor()?;
     assert!(ex.input(&input, Mat::from_f32(&[1.], &[1])?).is_err());
     assert!(ex.extract_into(&output, &mut Vec::new()).is_err());

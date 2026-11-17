@@ -76,7 +76,7 @@ pub use mat::{
 };
 pub use net::{
     BlobId, BlobInfo, Endpoint, Extractor, FinalOutput, Input, LayerInfo, Net, NetBuilder,
-    OutputGuard, OutputRange, ShapeInfo, TensorWidth,
+    OutputGuard, OutputRange, ParamSource, ShapeInfo, TensorWidth, WeightSource,
 };
 pub use options::{CpuOption, OptionFlag, Options};
 pub use param::{ParamDict, ParamKind};

@@ -1,6 +1,7 @@
 use ncnn::{CpuOption, Mat, Net, Options};
 use ncnn_rust as ncnn;
 use ncnn_rust::TensorWidth;
+use ncnn_rust::WeightSource;
 use std::{io::Read, path::Path, process::Command};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -213,10 +214,10 @@ fn operator_regression(root: &Path, executable: &Path) -> Result<()> {
         net.configure(&options)?;
         let mut retained: Option<(ncnn::FinalOutput, Vec<f32>)> = None;
         for name in ["operators", "operators-reloaded"] {
-            net.load_param_file(root.join(format!("{name}.param")))?;
+            net.load_param(&root.join(format!("{name}.param")))?;
             assert!(net.extractor().is_err());
-            net.load_model_file(root.join(format!("{name}.bin")))?;
-            assert!(net.load_model(&[]).is_err());
+            net.load_model(&root.join(format!("{name}.bin")))?;
+            assert!(net.load_model(WeightSource::EMPTY).is_err());
             assert!(net.configure(&options).is_err());
             let heights: &[usize] = if name == "operators" {
                 &[2, 3, 1]
@@ -519,14 +520,14 @@ fn main() -> Result<()> {
                 );
             }
             net.configure(&options)?;
-            net.load_param_file(Path::new(&root).join(format!("{name}.param")))?;
+            net.load_param(&Path::new(&root).join(format!("{name}.param")))?;
             let model_path = Path::new(&root).join(format!("{name}.bin"));
             if profile == 3 {
                 unsafe {
                     net.load_model_file_native(&model_path)?;
                 }
             } else {
-                net.load_model_file(&model_path)?;
+                net.load_model(&model_path)?;
             }
             let inputs = net.input_names();
             assert_eq!(inputs.len(), 1);
