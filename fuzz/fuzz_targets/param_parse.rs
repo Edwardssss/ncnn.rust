@@ -7,7 +7,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use ncnn_rust::{DataReader, Net};
+use ncnn_rust::{DataReader, Net, ParamSource, WeightSource};
 
 fuzz_target!(|data: &[u8]| {
     let split = data.len() / 2;
@@ -15,18 +15,18 @@ fuzz_target!(|data: &[u8]| {
     let binary = &data[split..];
 
     if let Ok(mut net) = Net::new() {
-        if net.load_param(&text).is_ok() {
-            let _ = net.load_model(binary);
+        if net.load_param(ParamSource::Text(text.as_ref())).is_ok() {
+            let _ = net.load_model(WeightSource::Bytes(binary));
         }
     }
     if let Ok(mut net) = Net::new() {
-        if net.load_param_binary(binary).is_ok() {
-            let _ = net.load_model(binary);
+        if net.load_param(ParamSource::Binary(binary)).is_ok() {
+            let _ = net.load_model(WeightSource::Bytes(binary));
         }
     }
     if let (Ok(reader), Ok(mut net)) = (DataReader::from_bytes(data), Net::new()) {
-        if net.load_param_reader(&reader).is_ok() {
-            let _ = net.load_model_reader(&reader);
+        if net.load_param(ParamSource::Reader(&reader)).is_ok() {
+            let _ = net.load_model(WeightSource::Reader(&reader));
         }
     }
 });
