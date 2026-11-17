@@ -36,7 +36,6 @@ impl ElementKind {
             Self::I32 => 6,
         }
     }
-
     /// Returns the byte width of one element in this format.
     pub fn element_bytes(self) -> usize {
         match self {
@@ -45,7 +44,6 @@ impl ElementKind {
             Self::I8 | Self::U8 => 1,
         }
     }
-
     /// Returns the format name used in error messages.
     pub fn label(self) -> &'static str {
         match self {
@@ -179,18 +177,23 @@ pub(crate) enum Provenance {
 ///
 /// # Surface
 ///
-/// The methods group by capability, and each group answers one question:
+/// The methods group by capability, and each group answers one question. The source order
+/// matches the table, so the rendered method list reads in the same groups:
 ///
 /// | Group | Methods |
 /// |---|---|
 /// | Construction | `from_f32`, `from_f32_batch`, `from_typed`, `from_i8`, `from_pixels`, `from_external` |
-/// | Typed access | `info`, `to_f32`, `to_f32_typed`, `to_i8`, `copy_to_f32`, `to_f32_into`, `as_f32_slice`, `channel_f32` |
-/// | Layout | `shape`, `total`, `is_empty`, `flatten`, `with_packing`, `deep_clone`, `reshape`, `into_reshape`, `reshape_view` |
 /// | Sub views | `channel`, `channel_range`, `depth`, `depth_range`, `column_range`, `row_range`, `batch`, `batch_range` |
+/// | Metadata | `info`, `is_empty` |
+/// | Typed access | `to_f32`, `to_f32_typed`, `to_i8`, `copy_to_f32`, `to_f32_into`, `as_f32_slice`, `channel_f32`, `read_f32_unchecked` |
+/// | Layout | `flatten`, `with_packing`, `deep_clone`, `reshape`, `into_reshape`, `reshape_view` |
 /// | Values in place | `fill`, `normalized`, `normalize_in_place`, `into_normalized` |
-/// | Pixels | `to_pixels`, `to_pixels_resize`, `from_pixels` |
+/// | Pixels | `to_pixels`, `to_pixels_resize` |
 /// | Borders | `copy_make_border`, `copy_cut_border`, `copy_make_border_3d`, `copy_cut_border_3d` |
-/// | Raw escape | `as_raw`, `into_raw` |
+/// | Raw escape | `as_raw`, `into_raw`, `from_raw_owned` |
+///
+/// The extents themselves come from [`TensorInfo`], which `info` returns: `shape` and `total`
+/// describe an existing tensor rather than build one.
 ///
 /// The consuming forms (`into_reshape`, `into_normalized`) exist because they keep storage the
 /// caller already owns; the borrowing forms do the same work behind a copy.
@@ -263,6 +266,7 @@ impl TensorInfo {
     }
 }
 impl Mat {
+    // --- Construction ---
     /// Copies FP32 values into a new tensor of the given rank and extents.
     ///
     /// ```
@@ -323,46 +327,6 @@ impl Mat {
             Self::owned(raw, true)
         }
     }
-    /// Collapses the tensor into one unpacked dimension.
-    ///
-    /// This is the shape a fully connected layer expects, and it runs on the native kernel. Packed
-    /// or padded storage is expanded first, so the result is unpacked FP32.
-    pub fn flatten(&self) -> Result<Self> {
-        let mut raw = std::ptr::null_mut();
-        unsafe {
-            status(sys::ncnn_rs_mat_flatten(self.raw, &mut raw))?;
-            Self::owned(raw, self.f32_known)
-        }
-    }
-    /// Returns a copy in another element packing.
-    ///
-    /// Packing groups consecutive elements of the packing axis into one lane, which is the layout
-    /// the packed SIMD kernels read. The request must divide the element count of that axis; a pack
-    /// of one returns unpacked storage. The values keep their relative order inside a lane, so a
-    /// packed tensor reads back in lane order rather than plane order; unpack it before comparing
-    /// against plane-ordered values.
-    pub fn with_packing(&self, elempack: i32) -> Result<Self> {
-        if elempack < 1 {
-            return Err(Error::invalid("Element packing must be positive"));
-        }
-        let info = self.info();
-        let axis = match info.dims {
-            1 => info.w,
-            2 => info.h,
-            3 | 4 => info.c,
-            _ => return Err(Error::invalid("Element packing needs a shaped tensor")),
-        };
-        if axis % elempack != 0 {
-            return Err(Error::invalid(
-                "Element packing must divide the packing axis",
-            ));
-        }
-        let mut raw = std::ptr::null_mut();
-        unsafe {
-            status(sys::ncnn_rs_mat_pack(self.raw, elempack, &mut raw))?;
-            Self::owned(raw, self.f32_known)
-        }
-    }
     /// Copies typed bytes into a new tensor of the given rank and extents.
     ///
     /// `data` holds elements of `kind.element_bytes()` bytes in channel-plane order, the
@@ -420,6 +384,82 @@ impl Mat {
     pub(crate) fn is_transferable(&self) -> bool {
         self.provenance == Provenance::Owned
     }
+    /// Copies interleaved pixels into a new tensor.
+    pub fn from_pixels(
+        data: &[u8],
+        format: PixelFormat,
+        width: usize,
+        height: usize,
+    ) -> Result<Self> {
+        let (_, count) = shape(&[width, height, format.channels()])?;
+        let stride = width
+            .checked_mul(format.channels())
+            .and_then(|v| i32::try_from(v).ok())
+            .ok_or(Error::invalid("Pixel stride overflow"))?;
+        if count != data.len() {
+            return Err(Error::invalid("Pixel buffer size mismatch"));
+        }
+        unsafe {
+            Self::owned(
+                sys::ncnn_mat_from_pixels(
+                    data.as_ptr(),
+                    format as i32,
+                    width as i32,
+                    height as i32,
+                    stride,
+                    std::ptr::null_mut(),
+                ),
+                true,
+            )
+        }
+    }
+    /// Builds a tensor that borrows caller storage instead of copying it.
+    ///
+    /// The native tensor keeps the pointer, so this is the zero-copy input path: a caller that
+    /// already holds frame data avoids one copy per request. Reads through the returned tensor
+    /// behave like any other tensor, and the tensor never frees the buffer.
+    ///
+    /// # Safety
+    ///
+    /// `data` must stay alive, keep its length and stay free of mutable aliases until this tensor
+    /// and every native object that received it are dropped. An extractor that submitted it holds
+    /// the pointer until it is dropped, so the borrow has to cover the extraction. Use
+    /// [`Input::borrowed`](crate::Input::borrowed) when the borrow only has to cover one
+    /// request.
+    pub unsafe fn from_external(data: &[f32], dimensions: &[usize]) -> Result<Self> {
+        let (s, count) = shape(dimensions)?;
+        if data.len() != count {
+            return Err(Error::invalid(format!(
+                "Data length {} does not match a shape of {count} elements",
+                data.len()
+            )));
+        }
+        let pointer = data.as_ptr().cast_mut().cast::<std::ffi::c_void>();
+        let raw = match dimensions.len() {
+            1 => sys::ncnn_mat_create_external_1d(s[0], pointer, std::ptr::null_mut()),
+            2 => sys::ncnn_mat_create_external_2d(s[0], s[1], pointer, std::ptr::null_mut()),
+            3 => sys::ncnn_mat_create_external_3d(s[0], s[1], s[2], pointer, std::ptr::null_mut()),
+            _ => sys::ncnn_mat_create_external_4d(
+                s[0],
+                s[1],
+                s[2],
+                s[3],
+                pointer,
+                std::ptr::null_mut(),
+            ),
+        };
+        if raw.is_null() {
+            return Err(Error::Native(-100));
+        }
+        Ok(Self {
+            raw,
+            f32_known: true,
+            provenance: Provenance::External,
+            _thread: PhantomData,
+        })
+    }
+
+    // --- Sub views ---
     /// Borrows one channel as a read-only alias.
     ///
     /// The alias shares this tensor's storage. It rejects a channel outside `0..c`, and the source
@@ -481,15 +521,8 @@ impl Mat {
         mat.provenance = Provenance::Adopted;
         Ok(MatView { mat, _source: self })
     }
-    /// Reports whether the tensor holds no elements.
-    ///
-    /// A tensor is empty when native storage has not been created or a shape dimension leaves it
-    /// without storage slots, which is what a failed allocation also reports.
-    pub fn is_empty(&self) -> bool {
-        let info = self.info();
-        let detached = unsafe { sys::ncnn_mat_get_data(self.raw).is_null() };
-        detached || info.c <= 0 || info.cstep == 0
-    }
+
+    // --- Metadata ---
     /// Returns the native shape and stride metadata.
     pub fn info(&self) -> TensorInfo {
         unsafe {
@@ -506,6 +539,17 @@ impl Mat {
             }
         }
     }
+    /// Reports whether the tensor holds no elements.
+    ///
+    /// A tensor is empty when native storage has not been created or a shape dimension leaves it
+    /// without storage slots, which is what a failed allocation also reports.
+    pub fn is_empty(&self) -> bool {
+        let info = self.info();
+        let detached = unsafe { sys::ncnn_mat_get_data(self.raw).is_null() };
+        detached || info.c <= 0 || info.cstep == 0
+    }
+
+    // --- Typed access ---
     /// Copies 32-bit unpacked storage as FP32 values. The caller selects the
     /// interpretation for tensors whose scalar format is supplied by the model.
     pub fn to_f32(&self) -> Result<Vec<f32>> {
@@ -711,6 +755,48 @@ impl Mat {
         out.set_len(count);
         Ok(out)
     }
+
+    // --- Layout ---
+    /// Collapses the tensor into one unpacked dimension.
+    ///
+    /// This is the shape a fully connected layer expects, and it runs on the native kernel. Packed
+    /// or padded storage is expanded first, so the result is unpacked FP32.
+    pub fn flatten(&self) -> Result<Self> {
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            status(sys::ncnn_rs_mat_flatten(self.raw, &mut raw))?;
+            Self::owned(raw, self.f32_known)
+        }
+    }
+    /// Returns a copy in another element packing.
+    ///
+    /// Packing groups consecutive elements of the packing axis into one lane, which is the layout
+    /// the packed SIMD kernels read. The request must divide the element count of that axis; a pack
+    /// of one returns unpacked storage. The values keep their relative order inside a lane, so a
+    /// packed tensor reads back in lane order rather than plane order; unpack it before comparing
+    /// against plane-ordered values.
+    pub fn with_packing(&self, elempack: i32) -> Result<Self> {
+        if elempack < 1 {
+            return Err(Error::invalid("Element packing must be positive"));
+        }
+        let info = self.info();
+        let axis = match info.dims {
+            1 => info.w,
+            2 => info.h,
+            3 | 4 => info.c,
+            _ => return Err(Error::invalid("Element packing needs a shaped tensor")),
+        };
+        if axis % elempack != 0 {
+            return Err(Error::invalid(
+                "Element packing must divide the packing axis",
+            ));
+        }
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            status(sys::ncnn_rs_mat_pack(self.raw, elempack, &mut raw))?;
+            Self::owned(raw, self.f32_known)
+        }
+    }
     /// Copies the tensor into independent native storage.
     pub fn deep_clone(&self) -> Result<Self> {
         let mut raw = std::ptr::null_mut();
@@ -786,6 +872,21 @@ impl Mat {
             Self::owned(raw, self.f32_known)
         }
     }
+
+    // --- Values in place ---
+    /// Fills owned unpacked FP32 storage with one value.
+    ///
+    /// This is the allocation-free way to clear a reusable input buffer. The storage rules match
+    /// [`normalize_in_place`](Self::normalize_in_place).
+    pub fn fill(&mut self, value: f32) -> Result<()> {
+        self.ensure_writable("In-place fill")?;
+        let m = self.info();
+        if !self.f32_known || m.elemsize != 4 || m.elempack != 1 {
+            return Err(Error::invalid("Fill requires unpacked FP32 storage"));
+        }
+        unsafe { sys::ncnn_mat_fill_float(self.raw, value) };
+        Ok(())
+    }
     /// Returns a copy with mean subtraction and scaling applied per channel.
     pub fn normalized(&self, mean: &[f32], norm: &[f32]) -> Result<Self> {
         let m = self.info();
@@ -855,19 +956,6 @@ impl Mat {
         })?;
         Ok(())
     }
-    /// Fills owned unpacked FP32 storage with one value.
-    ///
-    /// This is the allocation-free way to clear a reusable input buffer. The storage rules match
-    /// [`normalize_in_place`](Self::normalize_in_place).
-    pub fn fill(&mut self, value: f32) -> Result<()> {
-        self.ensure_writable("In-place fill")?;
-        let m = self.info();
-        if !self.f32_known || m.elemsize != 4 || m.elempack != 1 {
-            return Err(Error::invalid("Fill requires unpacked FP32 storage"));
-        }
-        unsafe { sys::ncnn_mat_fill_float(self.raw, value) };
-        Ok(())
-    }
     /// Applies mean subtraction and scaling while consuming the tensor.
     ///
     /// Storage this crate owns is rewritten in place, so the call allocates nothing; any other
@@ -889,51 +977,8 @@ impl Mat {
         }
         Ok(())
     }
-    /// Builds a tensor that borrows caller storage instead of copying it.
-    ///
-    /// The native tensor keeps the pointer, so this is the zero-copy input path: a caller that
-    /// already holds frame data avoids one copy per request. Reads through the returned tensor
-    /// behave like any other tensor, and the tensor never frees the buffer.
-    ///
-    /// # Safety
-    ///
-    /// `data` must stay alive, keep its length and stay free of mutable aliases until this tensor
-    /// and every native object that received it are dropped. An extractor that submitted it holds
-    /// the pointer until it is dropped, so the borrow has to cover the extraction. Use
-    /// [`Input::borrowed`](crate::Input::borrowed) when the borrow only has to cover one
-    /// request.
-    pub unsafe fn from_external(data: &[f32], dimensions: &[usize]) -> Result<Self> {
-        let (s, count) = shape(dimensions)?;
-        if data.len() != count {
-            return Err(Error::invalid(format!(
-                "Data length {} does not match a shape of {count} elements",
-                data.len()
-            )));
-        }
-        let pointer = data.as_ptr().cast_mut().cast::<std::ffi::c_void>();
-        let raw = match dimensions.len() {
-            1 => sys::ncnn_mat_create_external_1d(s[0], pointer, std::ptr::null_mut()),
-            2 => sys::ncnn_mat_create_external_2d(s[0], s[1], pointer, std::ptr::null_mut()),
-            3 => sys::ncnn_mat_create_external_3d(s[0], s[1], s[2], pointer, std::ptr::null_mut()),
-            _ => sys::ncnn_mat_create_external_4d(
-                s[0],
-                s[1],
-                s[2],
-                s[3],
-                pointer,
-                std::ptr::null_mut(),
-            ),
-        };
-        if raw.is_null() {
-            return Err(Error::Native(-100));
-        }
-        Ok(Self {
-            raw,
-            f32_known: true,
-            provenance: Provenance::External,
-            _thread: PhantomData,
-        })
-    }
+
+    // --- Pixels ---
     /// Converts unpacked FP32 planes into interleaved pixels.
     ///
     /// `stride` is the destination distance between rows in bytes and must cover
@@ -1027,6 +1072,8 @@ impl Mat {
         }
         Ok((info.w, info.h))
     }
+
+    // --- Borders ---
     /// Adds a border around every plane with the native padding kernel.
     ///
     /// This is the letterbox step: the native kernel writes the border instead of a Rust-side loop.
@@ -1187,35 +1234,8 @@ impl Mat {
         }
         Ok(info)
     }
-    /// Copies interleaved pixels into a new tensor.
-    pub fn from_pixels(
-        data: &[u8],
-        format: PixelFormat,
-        width: usize,
-        height: usize,
-    ) -> Result<Self> {
-        let (_, count) = shape(&[width, height, format.channels()])?;
-        let stride = width
-            .checked_mul(format.channels())
-            .and_then(|v| i32::try_from(v).ok())
-            .ok_or(Error::invalid("Pixel stride overflow"))?;
-        if count != data.len() {
-            return Err(Error::invalid("Pixel buffer size mismatch"));
-        }
-        unsafe {
-            Self::owned(
-                sys::ncnn_mat_from_pixels(
-                    data.as_ptr(),
-                    format as i32,
-                    width as i32,
-                    height as i32,
-                    stride,
-                    std::ptr::null_mut(),
-                ),
-                true,
-            )
-        }
-    }
+
+    // --- Raw escape ---
     /// Borrows the native handle without transferring ownership.
     ///
     /// Unsafe native writers must preserve Rust tensor borrows, including output
