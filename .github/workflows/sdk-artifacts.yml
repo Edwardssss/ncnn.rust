@@ -1,0 +1,123 @@
+name: SDK artifacts
+
+# Publishes prebuilt SDKs so a consumer can install ncnn without CMake, glslang and a
+# C++ build of the engine. This workflow never runs on a pull request: the artifacts
+# change only when the pinned release does, so the work belongs to a deliberate dispatch
+# or a `sdk-*` tag rather than to every push.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["sdk-*"]
+
+env:
+  NCNN_VERSION: "20261020"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/sdk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Shared libraries only: a static archive built with one CRT cannot be linked
+          # by a consumer that chose another, so the artifact stays a DLL or .so.
+          - os: ubuntu-latest
+            platform: linux-x64-cpu
+            vulkan: ""
+            packages: cmake
+          - os: ubuntu-latest
+            platform: linux-x64-vulkan
+            vulkan: --vulkan
+            packages: cmake glslang-dev glslang-tools libvulkan-dev
+          - os: windows-latest
+            platform: windows-x64-cpu
+            vulkan: ""
+            packages: ""
+          - os: macos-15
+            platform: macos-arm64-cpu
+            vulkan: ""
+            packages: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Resolve Python
+        id: python
+        shell: bash
+        run: |
+          cmd=python3
+          command -v python3 >/dev/null 2>&1 || cmd=python
+          echo "cmd=$cmd" >> "$GITHUB_OUTPUT"
+          "$cmd" --version
+
+      - name: Build ncnn
+        run: |
+          ${{ steps.python.outputs.cmd }} tools/fetch-ncnn.py
+          ${{ steps.python.outputs.cmd }} tools/build-ncnn-sdk.py "vendor/ncnn-${{ env.NCNN_VERSION }}" "${{ env.NCNN_INSTALL_DIR }}" ${{ matrix.vulkan }}
+
+      # The archive keeps paths relative to the install prefix, which is the layout
+      # tools/install-sdk.py validates after unpacking. Git Bash hands backslash paths to
+      # bash, so the prefix is normalised before it is used as a directory.
+      - name: Pack the SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${NCNN_INSTALL_DIR//\\//}"
+          cd "$root"
+          directories=()
+          for directory in include lib lib64 bin; do
+            if [ -d "$directory" ]; then directories+=("$directory"); fi
+          done
+          asset="$GITHUB_WORKSPACE/ncnn-rust-sdk-${{ env.NCNN_VERSION }}-${{ matrix.platform }}.tar.gz"
+          tar -czf "$asset" "${directories[@]}"
+          tar -tzf "$asset" | head -n 20
+          ls -l "$asset"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-${{ matrix.platform }}
+          path: ${{ github.workspace }}/ncnn-rust-sdk-*.tar.gz
+
+  publish:
+    name: Publish the release assets
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # tools/install-sdk.py reads this file and refuses an archive that disagrees with
+      # it, so the checksum ships with the release instead of being a step a consumer has
+      # to reconstruct.
+      - name: Checksums
+        run: |
+          cd dist
+          ls -l
+          sha256sum ncnn-rust-sdk-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: sdk-${{ env.NCNN_VERSION }}
+        run: |
+          notes="Prebuilt ncnn ${{ env.NCNN_VERSION }} SDKs: the shared library, the feature set ncnn-rust requires and the project patches. Install with 'python3 tools/install-sdk.py --platform <name> --dest <dir>'; --list prints the names. SHA256SUMS detects a corrupted transfer, not a substituted release."
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "ncnn ${{ env.NCNN_VERSION }} SDK" --notes "$notes"
+          fi
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

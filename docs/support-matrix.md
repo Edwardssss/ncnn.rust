@@ -2,8 +2,11 @@
 
 CPU is the default backend. Vulkan is optional and requires a matching SDK and driver. Every
 target consumes an externally installed ncnn 20261020 SDK; the build script rejects other versions
-unless `NCNN_ALLOW_UNTESTED_VERSION=1` is set. Dated campaign results, machine details and
-reproduction logs live in the [evidence history](evidence-history.md).
+unless `NCNN_ALLOW_UNTESTED_VERSION=1` is set. `tools/install-sdk.py` installs a published archive
+instead of building one: `linux-x64-cpu`, `linux-x64-vulkan`, `windows-x64-cpu` and
+`macos-arm64-cpu`, all shared-library installs whose checksum and stamped release the installer
+verifies. Dated campaign results, machine details and reproduction logs live in the
+[evidence history](evidence-history.md).
 
 ## ncnn version matrix
 

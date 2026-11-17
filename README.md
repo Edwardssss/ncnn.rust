@@ -68,7 +68,22 @@ search directories. The SDK version is pinned to 20261020; `NCNN_ALLOW_UNTESTED_
 against another release for compatibility checks.
 
 `tools/fetch-ncnn.py` verifies the pinned source archive, and `tools/build-ncnn-sdk.py` applies the
-patches in `tools/patches/` and builds an SDK with the required feature set.
+patches in `tools/patches/` and builds an SDK with the required feature set. `--link-kind static`
+builds the static library that `NCNN_LINK_KIND=static` links instead of the default shared one.
+
+`tools/install-sdk.py` skips that local build by installing a published archive for the pinned
+release. The archives ship the shared library, so no linker choice is baked into them, and the
+installer checks the download against the release's `SHA256SUMS` and the release stamped in
+`platform.h`:
+
+```sh
+python3 tools/install-sdk.py --platform linux-x64-cpu --dest /opt/ncnn-20261020
+export NCNN_INSTALL_DIR=/opt/ncnn-20261020
+```
+
+`--list` prints the published archives: `linux-x64-cpu`, `linux-x64-vulkan`, `windows-x64-cpu` and
+`macos-arm64-cpu`. The checksum detects a corrupted transfer rather than a substituted release, and
+no build script downloads anything on its own.
 
 ## Usage
 
