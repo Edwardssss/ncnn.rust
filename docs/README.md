@@ -5,7 +5,7 @@ the evidence appendix.
 
 | File | Answers | Update when |
 |---|---|---|
-| [contracts.md](contracts.md) | What the safe API promises about ownership, lifetimes, unsupported operations and raw escape hatches | A public behaviour changes |
+| [contracts.md](contracts.md) | What each API tier promises about ownership, lifetimes, unsupported operations and raw escape hatches, and which features are outright non-goals | A public behaviour changes or a scope decision is taken |
 | [native-abi.md](native-abi.md) | What the adapter decides where the upstream C API is incomplete, and how far the runtime validation reaches | An adapter decision or a validation campaign changes |
 | [layer-coverage.md](layer-coverage.md) | Which layer types have a conformance case, what the coverage table reaches, and which native differences the fixtures avoid | A layer case or a native finding changes |
 | [support-matrix.md](support-matrix.md) | Which targets and options are supported, what each CI job proves, how to run ARM64 cross tests | A platform, SDK requirement or CI job changes |

@@ -6,6 +6,48 @@ relies on, and what remains unsafe. Dated counts, machine details and log paths 
 are in [native ABI and adapter decisions](native-abi.md); the layer list and known native
 differences are in [layer coverage](layer-coverage.md).
 
+## API tiers
+
+Every public item belongs to one tier, and the tier decides what the crate promises about it. The
+tier is a documentation and review boundary, not a crate boundary: the workspace splits raw bindings
+(`ncnn-rust-sys`) from the safe API (`ncnn-rust`), because that split has an independent dependency
+closure, and the tiers below stay inside `ncnn-rust`.
+
+| Tier | Contents | Promise |
+|---|---|---|
+| Core | `Net`, `NetBuilder`, `Extractor`, `OutputGuard`, `Mat`, `MatView`, `ReshapeView`, `TensorInfo`, `ElementKind`, `Options`, `CpuOption`, `OptionFlag`, `DataReader`, `Error`, `BlobId`, `Endpoint`, `version`, `cpu_count` | The full safe contract, covered by the semver check |
+| Introspection and host helpers | `Net::layers`, `Net::blobs`, `Net::shared_blobs`, `layer_type_index`, `LayerInfo`, `BlobInfo`, `ShapeInfo`, `image`, `heap`, `cpu` | Safe; no unsafe entry point |
+| Advanced adapters | `Layer`, `ModelBin`, `ParamDict`, `PoolAllocator`, `GraphLayer`, custom-layer registration | Unsafe where the native layer contract is the caller's, or permanently disables guard extraction |
+| Vulkan | `gpu::Device`, `DeviceInfo`, `Precision`, `Allocator`, `Tensor`, `Command`, `TensorGuard`, `BufferDescriptor`, pipeline cache | The safe subset; every object stays on the thread that created it |
+| Vulkan interop | `Allocator::import_buffer`, `TensorGuard::buffer_descriptor`, `Device::raw_device_handle` | `unsafe`; the caller owns the lifetime, synchronization and queue proof |
+| Raw bindings | `ncnn_rust::sys` | No independent semver guarantee; it moves with the safe crate's version |
+
+A new public item names its tier, and moving an item into an `unsafe` tier requires the contract text
+that justifies it. Behaviour that depends on the device, the driver or the linker is documented in
+the tier it belongs to rather than in the core section.
+
+## Non-goals
+
+These are decided rather than deferred. They bound the surface this crate maintains, and a change of
+mind is a design discussion, not a patch:
+
+- **Vulkan memory import and device adoption.** `VkDeviceMemory` import, caller-owned `VkDevice`
+  adoption and external queue-ownership transfer each need proof the wrapper cannot check. The pinned
+  native API has no adoption constructor, and a buffer handle plus a documented contract is the
+  largest surface worth keeping.
+- **Nonblocking submission.** ncnn's completion step performs deferred host transfers and
+  conversions after the fence, so a raw queue submit would skip required work. `Command::wait` is the
+  only completion form.
+- **Vulkan crate types.** The interop boundary speaks `u64` handles and `u32` flag values. Depending
+  on `ash` or another Vulkan crate would tie this crate's version to that crate's version.
+- **A crate per tier.** Core, advanced and Vulkan stay in one package; only the raw bindings are
+  separate. Splitting the safe API would multiply release, CI and version-skew work.
+- **Downloading ncnn during `cargo build`.** The SDK is supplied through `NCNN_INSTALL_DIR` or
+  installed beforehand by `tools/install-sdk.py`. A build script that fetches and compiles a native
+  dependency adds an unreproducible failure surface that no error message can explain.
+- **Per-layer GPU placement.** Native fallback stays, so a selected device is not a promise that
+  every layer runs on it.
+
 ## Networks and extraction
 
 An extractor borrows its network. The default options retain intermediate blobs (`lightmode = false`) for multi-output graphs. Applications may enable light mode for graphs with explicit Split nodes and matching consumption semantics. Configuration and loading require mutable access before extraction. Owned input methods transfer storage created or independently cloned by the crate; tensors adopted through raw handles are copied because their storage/allocator dependencies remain caller-managed. `Net::infer` returns independent final Rust vectors, and `infer_into` returns metadata and ranges into the caller's vector. Final-vector extraction copies validated logical FP32 elements while the native source is live and excludes native padding. Output handles are released on success and failure. Input setup failure preserves the old `infer_into` buffer; output failure leaves only completed output prefixes, with no ranges returned. Publication occurs after success when transactional results are required.
