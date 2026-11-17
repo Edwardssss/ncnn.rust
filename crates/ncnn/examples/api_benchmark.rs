@@ -49,7 +49,7 @@ fn request(
         ex.input(input_id.index(), input)?;
     } else if matches!(
         mode,
-        "owned-view" | "owned-mat" | "owned-guard" | "guard-detach" | "guard-into" | "name"
+        "owned-view" | "owned-mat" | "owned-guard" | "guard-into" | "name"
     ) {
         ex.input("input", input)?;
     } else {
@@ -72,11 +72,6 @@ fn request(
     }
     if mode == "owned-mat" {
         let output = ex.extract_mat("output", TensorWidth::Fp32)?;
-        let values = output.as_f32_slice()?;
-        return Ok(black_box(values[0] + values[values.len() - 1]));
-    }
-    if mode == "guard-detach" {
-        let output = ex.extract("output", TensorWidth::Fp32)?.detach()?;
         let values = output.as_f32_slice()?;
         return Ok(black_box(values[0] + values[values.len() - 1]));
     }
@@ -108,7 +103,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "owned-view"
             | "owned-mat"
             | "owned-guard"
-            | "guard-detach"
             | "guard-into"
             | "name"
             | "index"
@@ -123,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | "native-owned"
             | "pooled-request"
     ) {
-        return Err("Choose copy, view, owned-view, owned-mat, owned-guard, guard-detach, guard-into, name, index, resolved, resolved-reused, borrowed-reused, gpu-transfer, gpu-resident, preprocess, native-request, native-buffer, native-owned, or pooled-request".into());
+        return Err("Choose copy, view, owned-view, owned-mat, owned-guard, guard-into, name, index, resolved, resolved-reused, borrowed-reused, gpu-transfer, gpu-resident, preprocess, native-request, native-buffer, native-owned, or pooled-request".into());
     }
     let iterations: usize = args
         .get(2)

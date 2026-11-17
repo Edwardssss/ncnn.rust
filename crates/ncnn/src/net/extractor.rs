@@ -367,19 +367,6 @@ impl Extractor<'_> {
             )
         }
     }
-    /// Submits inputs in order; earlier inputs stay cached on failure.
-    ///
-    /// An error stops the sequence, and the inputs already submitted remain applied, so a caller
-    /// that retries continues from the failing entry rather than from the start.
-    pub fn inputs<'a>(
-        &mut self,
-        inputs: impl IntoIterator<Item = (impl Into<Endpoint<'a>>, Mat)>,
-    ) -> Result<()> {
-        for (endpoint, mat) in inputs {
-            self.input(endpoint.into(), mat)?;
-        }
-        Ok(())
-    }
     /// Submits a borrowed tensor without copying its storage.
     ///
     /// This is the zero-copy form of [`input`](Self::input): native input keeps a shallow handle,
@@ -501,12 +488,9 @@ impl Extractor<'_> {
     /// [`extract_mat`](Self::extract_mat) returns the tensor the extractor already detached without
     /// copying it, and [`crate::heap::retain_pages`] keeps the freed pages mapped on glibc Linux.
     pub fn extract_owned<'a>(&mut self, endpoint: impl Into<Endpoint<'a>>) -> Result<FinalOutput> {
-        let target = self.resolve(endpoint.into(), true)?;
-        let mat = self.extract_native(&target, false)?;
-        Ok(FinalOutput {
-            info: mat.info(),
-            values: mat.to_f32()?,
-        })
+        let mut values = Vec::new();
+        let info = self.extract_into(endpoint, &mut values)?;
+        Ok(FinalOutput { info, values })
     }
     /// Appends the output to a caller vector and returns its shape metadata.
     ///
@@ -525,29 +509,6 @@ impl Extractor<'_> {
         let info = mat.info();
         mat.append_f32_to(buffer)?;
         Ok(info)
-    }
-    /// Consumes outputs one at a time through scoped guards.
-    ///
-    /// ```compile_fail
-    /// fn escape(ex: &mut ncnn_rust::Extractor<'_>) {
-    ///     let mut escaped = None;
-    ///     ex.outputs_with(&["output"], |_, output| {
-    ///         escaped = Some(output.as_f32_slice()?);
-    ///         Ok(())
-    ///     }).unwrap();
-    ///     println!("{:?}", escaped);
-    /// }
-    /// ```
-    pub fn outputs_with(
-        &mut self,
-        names: &[&str],
-        mut consume: impl FnMut(&str, &OutputGuard<'_>) -> Result<()>,
-    ) -> Result<()> {
-        for name in names {
-            let output = self.extract(*name, TensorWidth::Fp32)?;
-            consume(name, &output)?;
-        }
-        Ok(())
     }
     /// Exposes advanced access and permanently disables this extractor's guards.
     ///
@@ -626,16 +587,6 @@ impl OutputGuard<'_> {
     /// [`Error::Invalid`](crate::Error::Invalid).
     pub fn channel_f32(&self, channel: usize) -> Result<&[f32]> {
         self.mat.channel_f32(channel)
-    }
-    /// Copies into storage that outlives the guard, extractor and network.
-    ///
-    /// The copy keeps the element width, so a quantized output stays readable through
-    /// [`Mat::to_i8`](crate::Mat::to_i8) after the next request has run.
-    /// [`into_mat`](Self::into_mat) consumes the guard instead and keeps the buffer the extractor
-    /// already detached, which costs no copy on a network that allocates intermediate tensors
-    /// through the process heap.
-    pub fn detach(&self) -> Result<Mat> {
-        self.mat.deep_clone()
     }
     /// Consumes the guard and keeps the extracted tensor without copying it.
     ///

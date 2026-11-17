@@ -5,7 +5,7 @@ All notable changes to this project are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release pins one ncnn release, so a
 library upgrade is a minor change of this crate.
 
-## Unreleased
+## 0.4.0 - Unreleased
 
 ### Added
 
@@ -33,11 +33,18 @@ library upgrade is a minor change of this crate.
   The extractor request surface drops from eight methods to four and the network from six to three,
   and no capability is lost.
 
+- `Extractor::extract_owned` is now the sugar form of `extract_into`: it allocates the vector and
+  delegates, so the FP32 conversion has one implementation instead of two.
+
 ### Removed
 
 - `Extractor::extract_stored`, `Extractor::extract_stored_owned`, `Extractor::extract_append`,
   `Net::infer_borrowed`, `Net::infer_borrowed_into` and `Net::infer_view_into`, replaced by the
   `TensorWidth` and `Input` arguments that `docs/migration.md` maps from the old names.
+- `Extractor::inputs` and `Extractor::outputs_with`, which only looped over `input` and `extract`;
+  the caller writes that loop and keeps the error policy visible.
+- `OutputGuard::detach`, the copying twin of `into_mat`: `into_mat` already copies when it cannot
+  own the storage, so the guard keeps one ownership path.
 
 ## 0.3.0 - 2026-11-11
 

@@ -1,5 +1,5 @@
 use ncnn_rust::Input;
-use ncnn_rust::{Mat, Net};
+use ncnn_rust::{Mat, Net, TensorWidth};
 
 fn main() -> ncnn_rust::Result<()> {
     let builder = Net::builder()?.threads(1)?;
@@ -66,14 +66,12 @@ fn main() -> ncnn_rust::Result<()> {
     }
     if !use_vulkan {
         let mut extractor = net.extractor()?;
-        extractor.inputs([
-            ("a", Mat::from_f32(&[1., 2., 3.], &[3])?),
-            ("b", Mat::from_f32(&[4., 5., 6.], &[3])?),
-        ])?;
-        extractor.outputs_with(&["sum"], |name, output| {
-            println!("{name}: {:?}", output.as_f32_slice()?);
-            Ok(())
-        })?;
+        extractor.input("a", Mat::from_f32(&[1., 2., 3.], &[3])?)?;
+        extractor.input("b", Mat::from_f32(&[4., 5., 6.], &[3])?)?;
+        {
+            let output = extractor.extract("sum", TensorWidth::Fp32)?;
+            println!("sum: {:?}", output.as_f32_slice()?);
+        }
         let detached = extractor.extract_owned("sum")?;
         drop(extractor);
         drop(net);

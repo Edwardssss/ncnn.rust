@@ -19,6 +19,12 @@ the evidence appendix.
 | [SECURITY.md](../SECURITY.md) | How to report a vulnerability and what the trust boundary is | The reporting route or the scope changes |
 | <https://edwardssss.github.io/ncnn.rust/ncnn_rust/> | Generated API reference | Automatically, on every push to the default branch |
 
+The workflows split by what triggers them, which is why a check can be absent from a pull request
+without being dropped: `ci.yml` runs per request, `msrv.yml` runs its SDK build only when a manifest
+or `rust-toolchain.toml` moves, `coverage.yml` runs weekly, `sdk-artifacts.yml` and
+`ncnn-matrix.yml` run on a dispatch, a tag or a schedule, and `release.yml` runs on a version tag.
+[Support matrix](support-matrix.md) records what each job proves.
+
 ## Writing rules
 
 - State behaviour directly. Describe what the code does, not what it might do.

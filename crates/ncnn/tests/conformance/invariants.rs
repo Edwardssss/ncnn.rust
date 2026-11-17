@@ -66,12 +66,12 @@ fn run_cache_step(net: &Net, query: Mat, past: Option<(Mat, Mat)>) -> (i32, Mat,
     let key = extractor
         .extract(Endpoint::Name("cache_k"), TensorWidth::Stored)
         .expect("key cache")
-        .detach()
+        .into_mat()
         .expect("key cache copy");
     let value = extractor
         .extract(Endpoint::Name("cache_v"), TensorWidth::Stored)
         .expect("value cache")
-        .detach()
+        .into_mat()
         .expect("value cache copy");
     let length = key.info().h;
     (length, key, value)

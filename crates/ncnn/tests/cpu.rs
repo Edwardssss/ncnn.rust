@@ -558,7 +558,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
                     assert_eq!(view.info().elempack, 1);
                 }
                 ex.input("input", Mat::from_f32(&values, &[1, 2, 16])?)?;
-                let input_copy = ex.extract("input", TensorWidth::Fp32)?.detach()?;
+                let input_copy = ex.extract("input", TensorWidth::Fp32)?.into_mat()?;
                 assert!(ex.extract("missing", TensorWidth::Fp32).is_err());
                 assert!(ex.extract("invalid\0name", TensorWidth::Fp32).is_err());
                 assert!(ex.extract_owned(-1).is_err());
@@ -583,7 +583,7 @@ fn low_copy_outputs() -> ncnn::Result<()> {
                     assert!(ex.extract("positive", TensorWidth::Fp32).is_err());
                     drop(other);
                 }
-                let detached = ex.extract("positive", TensorWidth::Fp32)?.detach()?;
+                let detached = ex.extract("positive", TensorWidth::Fp32)?.into_mat()?;
                 let absolute_copy = ex.extract_owned("absolute")?;
                 drop(ex);
                 drop(net);
@@ -706,29 +706,32 @@ fn ergonomic_paths() -> ncnn::Result<()> {
         )
         .is_err());
     let mut sequential = net.extractor()?;
-    sequential.inputs([("a", a.deep_clone()?), ("b", b.deep_clone()?)])?;
+    sequential.input("a", a.deep_clone()?)?;
+    sequential.input("b", b.deep_clone()?)?;
     let mut seen = Vec::new();
-    sequential.outputs_with(&["sum", "product"], |name, output| {
+    for name in ["sum", "product"] {
+        let output = sequential.extract(name, TensorWidth::Fp32)?;
         seen.push((name.to_owned(), output.to_f32()?));
-        Ok(())
-    })?;
+    }
     assert_eq!(seen[0], ("sum".to_owned(), vec![3., 5., 7., 9.]));
     assert_eq!(seen[1], ("product".to_owned(), vec![2., 6., 12., 20.]));
+    // A consumer that stops mid-way is now the loop the caller writes, so the request ends after
+    // one extraction.
     let mut calls = 0;
-    assert!(sequential
-        .outputs_with(&["sum", "product"], |_, _| {
-            calls += 1;
-            Err(ncnn::Error::Invalid("consumer stopped".into()))
-        })
-        .is_err());
+    let mut consume = |name: &str| -> ncnn::Result<()> {
+        let _output = sequential.extract(name, TensorWidth::Fp32)?;
+        calls += 1;
+        Err(ncnn::Error::Invalid("consumer stopped".into()))
+    };
+    assert!(consume("sum").is_err());
     assert_eq!(calls, 1);
     assert_eq!(
         sequential.extract("product", TensorWidth::Fp32)?.to_f32()?,
         seen[1].1
     );
-    assert!(sequential
-        .inputs([("a", a.deep_clone()?), ("bad\0name", b.deep_clone()?)])
-        .is_err());
+    // An error stops the submission at that entry, and the inputs already submitted stay applied.
+    sequential.input("a", a.deep_clone()?)?;
+    assert!(sequential.input("bad\0name", b.deep_clone()?).is_err());
     assert_eq!(
         sequential.extract("a", TensorWidth::Fp32)?.to_f32()?,
         a.to_f32()?

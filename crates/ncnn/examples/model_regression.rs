@@ -326,7 +326,7 @@ fn check_runs(
     let mut max_error = 0f32;
     for iteration in 0..2 {
         let mut ex = net.extractor()?;
-        ex.inputs([(input_name.as_str(), input.deep_clone()?)])?;
+        ex.input(input_name.as_str(), input.deep_clone()?)?;
         let mut check = |index: usize, info, values: Vec<f32>| {
             max_error = max_error.max(compare(&native[index], info, &values));
             if iteration == 0 {
@@ -337,8 +337,8 @@ fn check_runs(
         };
         if iteration == 1 && guarded {
             let names: Vec<_> = native.iter().map(|output| output.name.as_str()).collect();
-            let mut index = 0;
-            ex.outputs_with(&names, |_, output| {
+            for (index, name) in names.iter().enumerate() {
+                let output = ex.extract(*name, TensorWidth::Fp32)?;
                 let info = output.info();
                 let values = output.to_f32()?;
                 let plane = info.w as usize * info.h as usize * info.d as usize;
@@ -354,9 +354,7 @@ fn check_runs(
                     assert_eq!(output.as_f32_slice()?, values);
                 }
                 check(index, info, values);
-                index += 1;
-                Ok(())
-            })?;
+            }
         } else {
             if !guarded {
                 assert!(ex.extract(&native[0].name, TensorWidth::Fp32).is_err());

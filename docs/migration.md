@@ -54,6 +54,10 @@ Behaviour that has changed between ncnn releases without a C API change:
   buffer)` becomes `infer_into(inputs, outputs, buffer)` with `Input::view`; `infer_borrowed_into`
   becomes `infer_into` the same way. The extractor request surface drops from eight methods to four
   and the network from six to three, and no capability is lost.
+  `Extractor::inputs` and `Extractor::outputs_with` are gone as well: submit each input with
+  `input` and extract each output with `extract`, which keeps the error policy in the caller's loop.
+  `OutputGuard::detach` is gone; `into_mat` consumes the guard and copies only when it cannot own
+  the storage.
 - **Patch releases** never change the pinned ncnn release, the public API or the storage contracts.
 
 ## Compatibility with the native library
