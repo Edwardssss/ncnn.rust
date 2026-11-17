@@ -63,28 +63,29 @@ reference is the independent column; those rows sit within the campaign spread o
 against the in-place column is the cost of one full-tensor copy, not wrapper overhead.
 
 The in-repo benchmark separates the same helpers. `api_benchmark preprocess 200 65536` on one
-Windows host, pinned to one core, minimum of three runs:
+Windows host, pinned to one core, minimum of three runs re-measured on 2026-11-17:
 
 | Helper | median us | note |
 |---|---:|---|
 | borrow (`from_external`) | 0.09 | header only |
-| `deep_clone` | 11.6 | allocation and one copy |
-| `reshape` | 12.5 | detaches because the native result aliases |
-| `into_reshape` | 0.19 | rewrites the header |
-| `normalized` | 17.7 | one pass into fresh storage |
-| `normalize_in_place` | 4.7 | the same pass, resident storage |
-| `flatten` | 0.92 | |
-| `with_packing(4)` | 0.91 | |
-| `copy_make_border` | 34.5 | 260 KB output |
-| `to_pixels` | 36.7 | |
-| `warp_affine` | 250.2 | bilinear, full frame |
+| `deep_clone` | 18.6 | allocation and one copy |
+| `reshape` | 12.0 | detaches because the native result aliases |
+| `into_reshape` | 0.18 | rewrites the header |
+| `normalized` | 18.8 | one pass into fresh storage |
+| `normalize_in_place` | 4.8 | the same pass, resident storage |
+| `flatten` | 0.95 | |
+| `with_packing(4)` | 1.01 | |
+| `copy_make_border` | 35.3 | 260 KB output |
+| `to_pixels` | 38.4 | |
+| `warp_affine` | 255.9 | bilinear, full frame |
 
 `normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one pass
-over the destination, so the copying form costs about 1.5 times a bare `deep_clone` instead of a clone
-followed by a native layer that walks the buffer again. Allocation and first touch dominate every row
-that allocates, and a shared host moved these medians by three times until the process was pinned to
-one core, which is why the table reports a minimum over runs. CI runs the same command in a debug
-build as a smoke check, so its printed medians verify the path rather than the timings.
+over the destination, so the copying form costs about what a bare `deep_clone` costs instead of a
+clone followed by a native layer that walks the buffer again. Allocation and first touch dominate
+every row that allocates: `deep_clone` moved between 18.6 and 25.2 us across the three runs on a
+shared host, and the same host moved these medians by three times until the process was pinned to one
+core, which is why the table reports a minimum over runs. CI runs the same command in a debug build as
+a smoke check, so its printed medians verify the path rather than the timings.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
@@ -128,8 +129,8 @@ allocates two data buffers plus the native clone its input needs.
 The table separates four effects.
 
 The wrapper matches the C API when both run the same steps. `guard-into`, `owned-mat` and
-`resolved-reused` land within one to seven percent of `native-owned` and `native-buffer` on both
-platforms, so the binding adds the call, the endpoint resolution and nothing else.
+`resolved-reused` land within a few percent of `native-owned` and `native-buffer` on both platforms,
+so the binding adds the call, the endpoint resolution and nothing else.
 
 The owned forms pay one native copy, and the wrapper adds none. `Extractor::extract` deep-clones an
 output whose storage comes from the network's local blob pool (`src/net.cpp`, the branch that
@@ -186,8 +187,8 @@ Rotating the cases warms the heap for every form, so the absolute figures here a
 single-mode medians above and describe a mixed workload; the ratios within a row are what the mode
 measures. The owned vector gains most because its buffer is the one that allocates. The borrowed
 forms gain too even though they allocate nothing on the caller side, because the pooled intermediates
-remove the engine's own per-request allocation. `extract_mat` gains nothing, and that is the point:
-a pooled network skips the native detach clone, so the wrapper copies instead of keeping the buffer,
+remove the engine's own per-request allocation. `extract_mat` gains least, and that is the point: a
+pooled network skips the native detach clone, so the wrapper copies instead of keeping the buffer,
 which makes pooling and zero-copy ownership alternatives rather than additions. The pools keep the
 blocks they served for as long as the network lives, so the retained set grows by the working set of
 one request and drops with the network.
@@ -328,6 +329,13 @@ MALLOC_MMAP_THRESHOLD_=1073741824 MALLOC_TRIM_THRESHOLD_=-1 \
 The [model fixtures](model-fixtures.md) page lists the reference build commands. The recorded
 campaign behind the tables ran 314 processes, 146 CPU cases, 146 Vulkan-enabled cases, 3358 steady
 groups and 23506 steady samples.
+
+Those commands were re-run against the 0.4.0 API on 2026-11-17, nine runs per request-path mode and
+three per helper, on the same Windows host. The ranking and the mechanism held; the absolute values
+sat 7 to 20% above the recorded campaign because the host carried other work at the time. The native
+references kept their order at 12.9, 20.6 and 26.7 us, the reuse forms followed at 14.3 to 20.7 us,
+and `owned-view` and `copy` stayed inside the Windows band recorded above at 22.3 us and 340 us. The
+guest columns were not re-run.
 
 Fourteen cases extend the highest-risk operators with parameter variants taken from the upstream
 tests: Convolution dilation, stride and activation; Pooling average, global and counted padding;
