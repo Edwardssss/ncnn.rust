@@ -352,13 +352,13 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
           NCNN_TEST_DEVICE: vulkan
-        run: cargo test --workspace --features vulkan
+        run: cargo test --workspace --all-features
 
       # The other jobs build a CPU-only SDK, so the feature-gated test code is linted here.
       - name: Clippy with the Vulkan feature
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo clippy --workspace --all-targets --features vulkan -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       # Both examples reach the device, so they run where one exists.
       - name: Vulkan examples

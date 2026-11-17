@@ -2,11 +2,10 @@ use ncnn_rust as ncnn;
 use ncnn_rust::ParamSource;
 use ncnn_rust::TensorWidth;
 use ncnn_rust::WeightSource;
+use ncnn_sys as sys;
 mod advanced;
 
-use ncnn::{
-    alloc::Pool, sys, CpuOption, Layer, Mat, ModelBin, Net, Options, ParamDict, PixelFormat,
-};
+use ncnn::{alloc::Pool, CpuOption, Layer, Mat, ModelBin, Net, Options, ParamDict, PixelFormat};
 
 const GRAPH: &str = "7767517\n4 4\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\nBinaryOp product 2 1 a b product 0=2\n";
 

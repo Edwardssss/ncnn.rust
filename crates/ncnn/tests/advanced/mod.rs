@@ -1,9 +1,10 @@
 use ncnn::alloc::Pool;
-use ncnn::{sys, Mat, Options, ParamDict};
+use ncnn::{Mat, Options, ParamDict};
 use ncnn_rust as ncnn;
 use ncnn_rust::ParamSource;
 use ncnn_rust::TensorWidth;
 use ncnn_rust::WeightSource;
+use ncnn_sys as sys;
 
 pub fn run() -> ncnn::Result<()> {
     assert!(ncnn::cpu::physical_core_count()? > 0);

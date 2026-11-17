@@ -4,6 +4,7 @@
 use crate::support::{self, assert_close_with, tagged};
 use ncnn_rust::TensorWidth;
 use ncnn_rust::{ElementKind, Endpoint, Mat, Net};
+use ncnn_sys as sys;
 
 #[test]
 fn key_value_cache_keeps_what_it_already_saw() {
@@ -130,17 +131,9 @@ fn narrow_elements_convert_to_fp32() {
             [1.0, -2.0, 0.5, 0.0],
         ),
     ] {
-        let mut raw: ncnn_rust::sys::ncnn_mat_t = std::ptr::null_mut();
+        let mut raw: sys::ncnn_mat_t = std::ptr::null_mut();
         let status = unsafe {
-            ncnn_rust::sys::ncnn_rs_mat_external_batch(
-                data,
-                1,
-                shape.as_ptr(),
-                1,
-                elemsize,
-                1,
-                &mut raw,
-            )
+            sys::ncnn_rs_mat_external_batch(data, 1, shape.as_ptr(), 1, elemsize, 1, &mut raw)
         };
         assert_eq!(status, 0, "external view");
         let mat = unsafe { Mat::from_raw_owned(raw, false) }.expect("view");

@@ -2,6 +2,7 @@ use ncnn::{CpuOption, Mat, Net, Options};
 use ncnn_rust as ncnn;
 use ncnn_rust::TensorWidth;
 use ncnn_rust::WeightSource;
+use ncnn_sys as sys;
 use std::{io::Read, path::Path, process::Command};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -277,7 +278,7 @@ fn probe_storage(net: &Net, input: &Mat, native: &ReferenceRun) -> Result<u32> {
     let mut raw = std::ptr::null_mut();
     let observed = unsafe {
         assert_eq!(
-            ncnn::sys::ncnn_rs_extract(probe.as_raw(), native.probe_index, 1, &mut raw),
+            sys::ncnn_rs_extract(probe.as_raw(), native.probe_index, 1, &mut raw),
             0
         );
         Mat::from_raw_owned(raw, false)?

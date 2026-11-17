@@ -300,7 +300,7 @@ fn native_request(
     iterations: usize,
     elements: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use ncnn_rust::sys;
+    use ncnn_sys as sys;
     let owned_input = mode != "native-request";
     let in_place = mode == "native-owned";
     let builder = Net::builder()?.threads(1)?;

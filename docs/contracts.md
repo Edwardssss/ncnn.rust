@@ -20,7 +20,7 @@ closure, and the tiers below stay inside `ncnn-rust`.
 | Advanced adapters | `Layer`, `ModelBin`, `ParamDict`, `alloc::Pool`, `GraphLayer`, custom-layer registration | Unsafe where the native layer contract is the caller's, or permanently disables guard extraction |
 | Vulkan | `gpu::Device`, `DeviceInfo`, `Precision`, `Allocator`, `Tensor`, `Command`, `TensorGuard`, `BufferDescriptor`, pipeline cache | The safe subset; every object stays on the thread that created it |
 | Vulkan interop | `Allocator::import_buffer`, `TensorGuard::buffer_descriptor` | `unsafe`; the caller owns the lifetime, synchronization and queue proof |
-| Raw bindings | `ncnn_rust::sys` | No independent semver guarantee; it moves with the safe crate's version |
+| Raw bindings | `ncnn_rust::sys`, behind the `raw` feature | No independent semver guarantee; it moves with the safe crate's version |
 
 `Device::raw_device_handle` is a safe call that returns a borrowed `u64` handle: calling it breaks no
 invariant, and what the caller does with the handle follows the interop contract. A new public item
@@ -228,9 +228,10 @@ alive and unmodified. `Mat::into_raw` transfers release responsibility, and
 expose native Vulkan objects with the same rule: the caller keeps the underlying storage alive,
 synchronized and unmodified for the whole Rust lifetime of every object derived from it.
 
-The re-exported `sys` module carries ncnn's C ABI and no independent semver guarantee: it moves with
-this crate's version, so a raw call site tracks the safe crate's minor version rather than a version
-of its own.
+The `sys` module carries ncnn's C ABI and no independent semver guarantee: it moves with this
+crate's version, so a raw call site tracks the safe crate's minor version rather than a version of
+its own. It is behind the `raw` feature because a generated binding surface is the part of this crate
+that cannot promise stability; the default build publishes no generated bindings at all.
 
 ## Optional Vulkan coverage
 

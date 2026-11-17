@@ -14,6 +14,8 @@ library upgrade is a minor change of this crate.
   buffer instead of duplicating it. `OutputGuard::into_mat` is the same form through a scoped guard,
   and `extract_mat` with `TensorWidth::Stored` uses it for stored storage.
 - `api_benchmark` gained the `owned-mat`, `guard-into`, `native-buffer` and `native-owned` modes.
+- A `raw` feature exposes the generated bindings as `ncnn_rust::sys`. The default build no longer
+  publishes them, so the crate's default surface carries no generated C ABI.
 
 ### Changed
 

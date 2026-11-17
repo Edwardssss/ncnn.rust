@@ -56,7 +56,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: cargo doc --workspace --no-deps --features vulkan
+        run: cargo doc --workspace --no-deps --all-features
 
       - name: Package site
         run: |

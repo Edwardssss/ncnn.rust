@@ -5,6 +5,7 @@
 use ncnn_rust::alloc::Pool;
 use ncnn_rust::{DataReader, Endpoint, Extractor, Mat, Net, ParamDict};
 use ncnn_rust::{Input, TensorWidth};
+use ncnn_sys as sys;
 use std::io::Cursor;
 const PARAM: &str = "7767517\n3 3\nInput a 0 1 a\nInput b 0 1 b\nBinaryOp sum 2 1 a b sum 0=0\n";
 
@@ -323,7 +324,7 @@ fn layer_handles_follow_the_loaded_graph() {
     // answers what the graph description reports for the same layer.
     let layer = net.layer_handle(0).unwrap();
     assert_eq!(
-        unsafe { ncnn_rust::sys::ncnn_rs_layer_flag(layer.as_raw(), 0, 0, 0) },
+        unsafe { sys::ncnn_rs_layer_flag(layer.as_raw(), 0, 0, 0) },
         i32::from(layers[0].support_int8_storage)
     );
     assert!(net.layer_handle(3).is_err());
@@ -913,34 +914,34 @@ fn graph_description_matches_the_parameter_text() {
     // selects the Vulkan subclass of the type, while `ncnn_layer_create_by_typeindex` builds the
     // base class and reports the plain flags.
     for layer in &layers {
-        let handle = unsafe { ncnn_rust::sys::ncnn_layer_create_by_typeindex(layer.typeindex) };
+        let handle = unsafe { sys::ncnn_layer_create_by_typeindex(layer.typeindex) };
         assert!(!handle.is_null(), "{} exists in the registry", layer.kind);
         unsafe {
             assert_eq!(
-                ncnn_rust::sys::ncnn_layer_get_one_blob_only(handle) != 0,
+                sys::ncnn_layer_get_one_blob_only(handle) != 0,
                 layer.one_blob_only,
                 "{} one-blob flag",
                 layer.kind
             );
             assert_eq!(
-                ncnn_rust::sys::ncnn_layer_get_support_inplace(handle) != 0,
+                sys::ncnn_layer_get_support_inplace(handle) != 0,
                 layer.support_inplace,
                 "{} in-place flag",
                 layer.kind
             );
             assert_eq!(
-                ncnn_rust::sys::ncnn_layer_get_support_packing(handle) != 0,
+                sys::ncnn_layer_get_support_packing(handle) != 0,
                 layer.support_packing,
                 "{} packing flag",
                 layer.kind
             );
             assert_eq!(
-                ncnn_rust::sys::ncnn_layer_get_support_bf16_storage(handle) != 0,
+                sys::ncnn_layer_get_support_bf16_storage(handle) != 0,
                 layer.support_bf16_storage,
                 "{} bf16 flag",
                 layer.kind
             );
-            ncnn_rust::sys::ncnn_layer_destroy(handle);
+            sys::ncnn_layer_destroy(handle);
         }
     }
 

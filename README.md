@@ -67,6 +67,10 @@ libraries in link order, optionally prefixed with `static=` or `dylib=`. `NCNN_E
 search directories. The SDK version is pinned to 20261020; `NCNN_ALLOW_UNTESTED_VERSION=1` builds
 against another release for compatibility checks.
 
+The `raw` feature exposes the generated bindings as `ncnn_rust::sys`. They carry ncnn's C ABI and no
+independent version policy, so the default build publishes none; the safe API is the surface that
+promises stability.
+
 `tools/fetch-ncnn.py` verifies the pinned source archive, and `tools/build-ncnn-sdk.py` applies the
 patches in `tools/patches/` and builds an SDK with the required feature set. `--link-kind static`
 builds the static library that `NCNN_LINK_KIND=static` links instead of the default shared one.

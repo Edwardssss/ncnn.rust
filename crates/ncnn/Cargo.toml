@@ -14,6 +14,9 @@ documentation = "https://edwardssss.github.io/ncnn.rust/ncnn_rust/"
 
 [features]
 default = []
+# Exposes the generated bindings as `ncnn_rust::sys`. They carry ncnn's C ABI and no independent
+# version policy, so they stay outside the default surface.
+raw = []
 vulkan = ["ncnn-sys/vulkan"]
 
 [dependencies]

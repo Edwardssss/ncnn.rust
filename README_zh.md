@@ -48,6 +48,8 @@ cargo run -p ncnn-rust --example add
 
 `NCNN_LINK_KIND` 选择 `static`（默认）或 `dylib`。共享 SDK 还需要把动态库所在目录加入运行时查找路径：Unix 上通过 `LD_LIBRARY_PATH` 或 `DYLD_LIBRARY_PATH` 指向 `lib`，Windows 上通过 `PATH` 指向 CMake 安装 `ncnn.dll` 的 `bin` 目录——在 Windows 上静态库与导入库同名 `ncnn.lib`。`NCNN_EXTRA_LIBS` 按链接顺序列出额外库，可带 `static=` 或 `dylib=` 前缀。`NCNN_EXTRA_LIB_DIRS` 追加库搜索目录。SDK 版本固定为 20261020；`NCNN_ALLOW_UNTESTED_VERSION=1` 可针对其他版本做兼容性验证。
 
+`raw` feature 把生成的绑定暴露为 `ncnn_rust::sys`。这些绑定遵循 ncnn 的 C ABI，没有独立的版本承诺，因此默认构建不发布它们；承诺稳定的是安全 API。
+
 `tools/fetch-ncnn.py` 校验固定版本的源码归档，`tools/build-ncnn-sdk.py` 应用 `tools/patches/` 中的补丁并构建具备上述特性的 SDK；`--link-kind static` 构建 `NCNN_LINK_KIND=static` 所链接的静态库，而不是默认的共享库。
 
 `tools/install-sdk.py` 跳过本地构建，直接安装固定版本的预编译归档。归档只提供共享库，因此不把链接方式固化进产物；安装器会校验下载内容的 `SHA256SUMS` 以及 `platform.h` 中标记的版本：

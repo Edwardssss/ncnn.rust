@@ -58,7 +58,15 @@ pub mod image;
 /// These items follow ncnn's C ABI rather than the safe crate's contracts, and they carry no
 /// independent semver guarantee: they move with this crate's version. The invariants in the safety
 /// contracts apply when they are called directly.
+///
+/// The module is behind the `raw` feature, so the default build publishes no generated bindings.
+#[cfg(feature = "raw")]
 pub use ncnn_sys as sys;
+
+// The crate's own code reaches the generated bindings under the same name either way: a `pub`
+// re-export is visible inside the crate too, so the two arms never overlap.
+#[cfg(not(feature = "raw"))]
+pub(crate) use ncnn_sys as sys;
 
 mod error;
 mod layer;
