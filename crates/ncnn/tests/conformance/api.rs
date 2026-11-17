@@ -415,14 +415,6 @@ fn param_dict_round_trips_every_entry_kind() {
 }
 
 #[test]
-fn unchecked_read_matches_the_checked_path() {
-    let mat = Mat::from_f32(&[1., 2., 3., 4.], &[2, 2]).unwrap();
-    let checked = mat.to_f32().unwrap();
-    let unchecked = unsafe { mat.read_f32_unchecked().unwrap() };
-    assert_eq!(checked, unchecked);
-}
-
-#[test]
 fn reshape_view_borrows_initialised_values() {
     let mat = Mat::from_f32(&[1., 2., 3., 4.], &[1, 2, 2]).unwrap();
     let view = mat.reshape_view(&[4]).unwrap();

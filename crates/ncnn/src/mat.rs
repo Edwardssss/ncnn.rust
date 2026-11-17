@@ -185,7 +185,7 @@ pub(crate) enum Provenance {
 /// | Construction | `from_f32`, `from_f32_batch`, `from_typed`, `from_i8`, `from_pixels`, `from_external` |
 /// | Sub views | `channel`, `channel_range`, `depth`, `depth_range`, `column_range`, `row_range`, `batch`, `batch_range` |
 /// | Metadata | `info`, `is_empty` |
-/// | Typed access | `to_f32`, `to_f32_typed`, `to_i8`, `copy_to_f32`, `to_f32_into`, `as_f32_slice`, `channel_f32`, `read_f32_unchecked` |
+/// | Typed access | `to_f32`, `to_f32_typed`, `to_i8`, `copy_to_f32`, `to_f32_into`, `as_f32_slice`, `channel_f32` |
 /// | Layout | `flatten`, `with_packing`, `deep_clone`, `reshape`, `into_reshape`, `reshape_view` |
 /// | Values in place | `fill`, `normalized`, `normalize_in_place`, `into_normalized` |
 /// | Pixels | `to_pixels`, `to_pixels_resize` |
@@ -743,19 +743,6 @@ impl Mat {
             .filter(|n| *n <= (isize::MAX as usize / 4).saturating_sub(64))
             .ok_or(Error::invalid("Tensor exceeds addressable length"))
     }
-    /// Copies logical elements, excluding channel and batch padding.
-    ///
-    /// # Safety
-    /// Every logical element must contain initialized FP32 data with pack 1.
-    pub unsafe fn read_f32_unchecked(&self) -> Result<Vec<f32>> {
-        let count = self.f32_copy_count()?;
-        let mut out: Vec<f32> = Vec::with_capacity(count);
-        status(sys::ncnn_rs_mat_read_f32(self.raw, out.as_mut_ptr(), count))?;
-        // The native copy initializes every element before the length is set.
-        out.set_len(count);
-        Ok(out)
-    }
-
     // --- Layout ---
     /// Collapses the tensor into one unpacked dimension.
     ///
