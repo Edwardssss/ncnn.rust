@@ -1,12 +1,11 @@
 # Platform support
 
-CPU is the default backend. Vulkan is optional and requires a matching SDK and driver. Every
-target consumes an externally installed ncnn 20261020 SDK; the build script rejects other versions
-unless `NCNN_ALLOW_UNTESTED_VERSION=1` is set. `tools/install-sdk.py` installs a published archive
-instead of building one: `linux-x64-cpu`, `linux-x64-vulkan`, `windows-x64-cpu` and
-`macos-arm64-cpu`, all shared-library installs whose checksum and stamped release the installer
-verifies. Dated campaign results, machine details and reproduction logs live in the
-[evidence history](evidence-history.md).
+CPU is the default backend. Vulkan is optional and requires a matching SDK and driver. Every target
+consumes an externally installed ncnn 20261020 SDK; the build script rejects other versions unless
+`NCNN_ALLOW_UNTESTED_VERSION=1` is set. `tools/install-sdk.py` installs a published archive instead
+of building one: `linux-x64-cpu`, `linux-x64-vulkan`, `windows-x64-cpu` and `macos-arm64-cpu`, all
+shared-library installs whose checksum and stamped release the installer verifies. Dated campaign
+results, machine details and reproduction logs live in the [evidence history](evidence-history.md).
 
 ## ncnn version matrix
 
@@ -25,8 +24,8 @@ adapter is compiled against one release and cannot link another.
 
 Because the pinned release is the newest tag today, `latest` and `previous` resolve to the two
 releases below it, so the matrix records how far back the pinned headers reach. A failure in a
-pinned row opens or updates a tracking issue, and a passing run comments on that issue and closes it,
-so an open tracker means the matrix is currently failing.
+pinned row opens or updates a tracking issue, and a passing run comments on that issue and closes
+it, so an open tracker means the matrix is currently failing.
 
 ## Targets
 
@@ -45,16 +44,15 @@ ownership interfaces are identical on every target.
 
 ## OS extensions
 
-`supports_thread_affinity` reports exact mask support. Linux exposes kernel CPU IDs and
-dynamically sized masks, Windows exposes group and index identities, and macOS reports
-`Error::Unsupported` for exact processor IDs while providing `sysctl` physical-core counts.
-Native affinity tags and exact CPU binding have different semantics; the portable core works
-independently of both.
+`supports_thread_affinity` reports exact mask support. Linux exposes kernel CPU IDs and dynamically
+sized masks, Windows exposes group and index identities, and macOS reports `Error::Unsupported` for
+exact processor IDs while providing `sysctl` physical-core counts. Native affinity tags and exact
+CPU binding have different semantics; the portable core works independently of both.
 
 Native precision options keep upstream behavior. The model runner compares actual intermediate
 formats with C++ rather than requiring the x86 FP16 fallback on every architecture. Unsafe
-standalone-layer tests select FP32 pipelines when supplying FP32 tensors directly; network
-execution performs native layout and precision conversion.
+standalone-layer tests select FP32 pipelines when supplying FP32 tensors directly; network execution
+performs native layout and precision conversion.
 
 ## Vulkan
 
@@ -63,15 +61,16 @@ and the SDK setting must agree; both mismatch directions fail during the build. 
 `tools/build-ncnn-sdk.py` also carry the patches in `tools/patches/`, which the validated results
 assume.
 
-Static linking is the default; `NCNN_LINK_KIND=dylib` selects shared linking. Static Vulkan needs the explicit dependency closure, for example
-`static=glslang,static=SPIRV` or the extended closure in the evidence history; the ncnn source tree
-ships no glslang, so the SDK is built with system glslang or the SDK's exported targets. Missing,
-delimiter-only or wrongly typed dependencies fail before linking.
+Static linking is the default; `NCNN_LINK_KIND=dylib` selects shared linking. Static Vulkan needs
+the explicit dependency closure, for example `static=glslang,static=SPIRV` or the extended closure
+in the evidence history; the ncnn source tree ships no glslang, so the SDK is built with system
+glslang or the SDK's exported targets. Missing, delimiter-only or wrongly typed dependencies fail
+before linking.
 
-Networks select a device before loading parameters and keep native per-layer CPU fallback, so
-Vulkan selection is not an all-GPU guarantee. Evidence for Windows/NVIDIA, Debian WSL lavapipe and
-the trained-model comparisons is recorded in the [evidence history](evidence-history.md) and
-[model fixtures](model-fixtures.md#windows-vulkan-trained-model-evidence).
+Networks select a device before loading parameters and keep native per-layer CPU fallback, so Vulkan
+selection is not an all-GPU guarantee. Evidence for Windows/NVIDIA, Debian WSL lavapipe and the
+trained-model comparisons is recorded in the [evidence history](evidence-history.md) and [model
+fixtures](model-fixtures.md#windows-vulkan-trained-model-evidence).
 
 ## Cross execution
 
@@ -88,13 +87,13 @@ export QEMU_CPU=max
 cargo test --workspace --target aarch64-unknown-linux-gnu
 ```
 
-A relocated toolchain also supplies its compiler sysroot and host tool-library paths. QEMU
-validates ABI, ownership, numeric behavior and instruction paths; its timing and `/proc` topology
-reflect the emulator, so native ARM performance remains real-device work. The `ubuntu-24.04-arm`
-CI job covers the native ARM64 build and test run. It also accepts a `workflow_dispatch` input
-`arm_mha_probe`, which runs `invariants::attention_probe_reports_finiteness` and prints the values
-for three attention configurations, so a target-specific attention difference names its
-configuration instead of one failing case.
+A relocated toolchain also supplies its compiler sysroot and host tool-library paths. QEMU validates
+ABI, ownership, numeric behavior and instruction paths; its timing and `/proc` topology reflect the
+emulator, so native ARM performance remains real-device work. The `ubuntu-24.04-arm` CI job covers
+the native ARM64 build and test run. It also accepts a `workflow_dispatch` input `arm_mha_probe`,
+which runs `invariants::attention_probe_reports_finiteness` and prints the values for three
+attention configurations, so a target-specific attention difference names its configuration instead
+of one failing case.
 
 ## Hosted CI coverage
 
@@ -124,7 +123,7 @@ The first hosted run of this matrix passed every job on 2026-11-09 for commit `f
 x86-64, Linux ARM64, Windows, both macOS images, the minimum Rust version and software Vulkan.
 
 Hosted runners expose no GPU, so the Vulkan job covers correctness and lifetime contracts on a
-software device. Timing, memory-type selection and driver behavior on discrete hardware remain
-local evidence. That job takes glslang and its CMake targets from `glslang-dev` plus `glslang-tools`,
-which the hosted image provides.
-Windows ARM64 uses the preview `windows-11-arm` label and stays outside this matrix.
+software device. Timing, memory-type selection and driver behavior on discrete hardware remain local
+evidence. That job takes glslang and its CMake targets from `glslang-dev` plus `glslang-tools`,
+which the hosted image provides. Windows ARM64 uses the preview `windows-11-arm` label and stays
+outside this matrix.

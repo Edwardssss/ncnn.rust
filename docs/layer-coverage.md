@@ -12,12 +12,12 @@ downloaded fixtures. Expected values come from Rust reference loops, so the suit
 wrapper regressions without a second backend.
 
 - `operators.rs` covers activation, arithmetic, normalisation, softmax, structural, convolution,
-  pooling, interpolation, matrix, rearrangement, one-dimensional, upsampling and reduction
-  families. Each family lists every layer variant it checks, including the high-risk parameter
-  combinations: convolution stride, dilation and fused activation; pooling average, global and
-  strided; interpolation nearest and bilinear; Gemm shape; softmax on three axes.
-- `graphs.rs` covers multi-input, split/concat, residual, pool/split/interp/concat and
-  multi-output topologies, plus repeated-run determinism and packing/FP16 option parity.
+  pooling, interpolation, matrix, rearrangement, one-dimensional, upsampling and reduction families.
+  Each family lists every layer variant it checks, including the high-risk parameter combinations:
+  convolution stride, dilation and fused activation; pooling average, global and strided;
+  interpolation nearest and bilinear; Gemm shape; softmax on three axes.
+- `graphs.rs` covers multi-input, split/concat, residual, pool/split/interp/concat and multi-output
+  topologies, plus repeated-run determinism and packing/FP16 option parity.
 - `layers.rs` holds the 56 layer cases the registered-type list needs. They run inside one test
   function so a failing type is named in the aggregate message instead of as a separate binary.
 - `allocation.rs` asserts that the reusable-buffer path allocates nothing once warm.
@@ -32,15 +32,15 @@ wrapper regressions without a second backend.
   detection heads decode regions from scores and priors.
 
 Native ncnn enables FP16 packed, storage and arithmetic by default on ARM64 and Apple Silicon, so
-results there round to FP16 before any comparison. The conformance suite pins a single-threaded
-FP32 pipeline and leaves the non-default pipelines to `packing_and_fp16_options_preserve_values`.
+results there round to FP16 before any comparison. The conformance suite pins a single-threaded FP32
+pipeline and leaves the non-default pipelines to `packing_and_fp16_options_preserve_values`.
 
 Weights use two block forms because ncnn reads `type = 0` blocks with a leading zero tag and
 `type = 1` blocks without one; `support.rs` provides both constructors. Layers that require an
-external blob, such as `CopyTo`, stay out of the suite because a single-input graph does not
-satisfy their contract. The campaign harness kept outside this repository remains the source for
-trained-model accuracy and native-reference timings; [performance](performance.md) lists the
-in-repo commands that exercise the same paths.
+external blob, such as `CopyTo`, stay out of the suite because a single-input graph does not satisfy
+their contract. The campaign harness kept outside this repository remains the source for
+trained-model accuracy and native-reference timings; [performance](performance.md) lists the in-repo
+commands that exercise the same paths.
 
 ## Coverage
 
@@ -67,7 +67,10 @@ in-repo commands that exercise the same paths.
 
 ## Known native differences
 
-- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an integer divide by zero during weight upload. The conformance fixture supplies both arrays, and the defect is reported upstream as Tencent/ncnn#7259.
+- `PriorBox_vulkan::upload_model` uploads `min_sizes` and `aspect_ratios` without an emptiness guard
+  while it guards `max_sizes`, so a network whose `PriorBox` omits `aspect_ratios` aborts with an
+  integer divide by zero during weight upload. The conformance fixture supplies both arrays, and the
+  defect is reported upstream as Tencent/ncnn#7259.
 
 Every case asserts finite output on every target. The attention case feeds the two-dimensional
 (embedding, sequence) operand the layer reads: a three-dimensional operand with one channel returns

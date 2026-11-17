@@ -6,6 +6,19 @@ relies on, and what remains unsafe. Dated counts, machine details and log paths 
 are in [native ABI and adapter decisions](native-abi.md); the layer list and known native
 differences are in [layer coverage](layer-coverage.md).
 
+## Contents
+
+- [API tiers](#api-tiers) and [Non-goals](#non-goals): what the crate promises, and what it has
+  decided not to do.
+- [Networks and extraction](#networks-and-extraction), [Borrowed inputs and zero
+  copy](#borrowed-inputs-and-zero-copy), [Graph description](#graph-description) and
+  [Tensors](#tensors): the inference path and the data it moves.
+- [Advanced resources](#advanced-resources), [Native allocation boundary](#native-allocation-boundary)
+  and [Raw escape hatches](#raw-escape-hatches): the unsafe edges.
+- [Vulkan ownership](#vulkan-ownership), [Resident Vulkan resources](#resident-vulkan-resources) and
+  [Optional Vulkan coverage](#optional-vulkan-coverage): the device backend.
+- [Related pages](#related-pages)
+
 ## API tiers
 
 Every public item belongs to one tier, and the tier decides what the crate promises about it. The
@@ -22,11 +35,11 @@ closure, and the tiers below stay inside `ncnn-rust`.
 | Vulkan interop | `Allocator::import_buffer`, `TensorGuard::buffer_descriptor` | `unsafe`; the caller owns the lifetime, synchronization and queue proof |
 | Raw bindings | `ncnn_rust::sys`, behind the `raw` feature | No independent semver guarantee; it moves with the safe crate's version |
 
-`Device::raw_device_handle` is a safe call that returns a borrowed `u64` handle: calling it breaks no
-invariant, and what the caller does with the handle follows the interop contract. A new public item
-names its tier, and moving an item into an `unsafe` tier requires the contract text that justifies
-it. Behaviour that depends on the device, the driver or the linker is documented in
-the tier it belongs to rather than in the core section.
+`Device::raw_device_handle` is a safe call that returns a borrowed `u64` handle: calling it breaks
+no invariant, and what the caller does with the handle follows the interop contract. A new public
+item names its tier, and moving an item into an `unsafe` tier requires the contract text that
+justifies it. Behaviour that depends on the device, the driver or the linker is documented in the
+tier it belongs to rather than in the core section.
 
 ## Non-goals
 
@@ -34,12 +47,12 @@ These are decided rather than deferred. They bound the surface this crate mainta
 mind is a design discussion, not a patch:
 
 - **Vulkan memory import and device adoption.** `VkDeviceMemory` import, caller-owned `VkDevice`
-  adoption and external queue-ownership transfer each need proof the wrapper cannot check. The pinned
-  native API has no adoption constructor, and a buffer handle plus a documented contract is the
-  largest surface worth keeping.
+  adoption and external queue-ownership transfer each need proof the wrapper cannot check. The
+  pinned native API has no adoption constructor, and a buffer handle plus a documented contract is
+  the largest surface worth keeping.
 - **Nonblocking submission.** ncnn's completion step performs deferred host transfers and
-  conversions after the fence, so a raw queue submit would skip required work. `Command::wait` is the
-  only completion form.
+  conversions after the fence, so a raw queue submit would skip required work. `Command::wait` is
+  the only completion form.
 - **Vulkan crate types.** The interop boundary speaks `u64` handles and `u32` flag values. Depending
   on `ash` or another Vulkan crate would tie this crate's version to that crate's version.
 - **A crate per tier.** Core, advanced and Vulkan stay in one package; only the raw bindings are
@@ -52,50 +65,134 @@ mind is a design discussion, not a patch:
 
 ## Networks and extraction
 
-An extractor borrows its network. The default options retain intermediate blobs (`lightmode = false`) for multi-output graphs. Applications may enable light mode for graphs with explicit Split nodes and matching consumption semantics. Configuration and loading require mutable access before extraction. Owned input methods transfer storage created or independently cloned by the crate; tensors adopted through raw handles are copied because their storage/allocator dependencies remain caller-managed. `Net::infer` returns independent final Rust vectors, and `infer_into` returns metadata and ranges into the caller's vector. Final-vector extraction copies validated logical FP32 elements while the native source is live and excludes native padding. Output handles are released on success and failure. Input setup failure preserves the old `infer_into` buffer; output failure leaves only completed output prefixes, with no ranges returned. Publication occurs after success when transactional results are required.
+An extractor borrows its network. The default options retain intermediate blobs
+(`lightmode = false`) for multi-output graphs. Applications may enable light mode for graphs with
+explicit Split nodes and matching consumption semantics. Configuration and loading require mutable
+access before extraction. Owned input methods transfer storage created or independently cloned by
+the crate; tensors adopted through raw handles are copied because their storage/allocator
+dependencies remain caller-managed. `Net::infer` returns independent final Rust vectors, and
+`infer_into` returns metadata and ranges into the caller's vector. Final-vector extraction copies
+validated logical FP32 elements while the native source is live and excludes native padding. Output
+handles are released on success and failure. Input setup failure preserves the old `infer_into`
+buffer; output failure leaves only completed output prefixes, with no ranges returned. Publication
+occurs after success when transactional results are required.
 
-One extractor runs any number of requests. The native extractor caches the blobs a request produced and recomputes a layer only while its output blob is empty, so `input` and `input_borrowed` restart the handle once a request extracted: the wrapper destroys the native extractor, creates another from the same network and re-applies the per-extractor overrides, so a reused handle answers each request from a fresh cache instead of returning the previous answer. `Extractor::clear` performs that restart explicitly, a handle that never extracted is submitted to directly, and `Extractor::continue_session` opts the next input out of the restart, which carries a native key/value cache across inputs. The overrides are `set_light_mode`, the blob, workspace and key/value cache allocators, and the cache length hint; they apply to one handle and leave the network options unchanged. Light mode sets a graph restriction of its own: ncnn releases a bottom blob after its first consumer and refills it from its producer, so a blob that feeds several layers, including an input consumed twice, cannot run under light mode. `Net::shared_blobs` lists those blobs, and enabling light mode while the list is not empty returns `Error::Invalid`, both through the per-extractor setter and through a network whose options enable it.
+One extractor runs any number of requests. The native extractor caches the blobs a request produced
+and recomputes a layer only while its output blob is empty, so `input` and `input_borrowed` restart
+the handle once a request extracted: the wrapper destroys the native extractor, creates another from
+the same network and re-applies the per-extractor overrides, so a reused handle answers each request
+from a fresh cache instead of returning the previous answer. `Extractor::clear` performs that
+restart explicitly, a handle that never extracted is submitted to directly, and
+`Extractor::continue_session` opts the next input out of the restart, which carries a native
+key/value cache across inputs.
 
-`extract` returns an `OutputGuard` with an exclusive extractor borrow. The guard owns and releases the returned native handle; its private tensor cannot escape as a slice or raw handle. Slices borrow the guard. The extractor and network therefore remain alive, and input replacement, re-extraction and destruction remain unavailable until the guard is dropped. Forgetting a guard can leak its handle but cannot extend a slice borrow. The guard exposes metadata, checked read-only FP32 views, explicit vector copying and `into_mat()`, which consumes the guard and takes the buffer the native extractor already detached.
+The overrides are `set_light_mode`, the blob, workspace and key/value cache allocators, and the
+cache length hint. They apply to one handle and leave the network options unchanged.
 
-The guard forwards the checked readers rather than exposing `&Mat`, because `Mat::as_raw` is a safe call: a borrow of the tensor would let a caller take the native handle the guard releases on drop, which is a use-after-free the type system could not catch. `into_mat` copies only when the storage cannot be owned: a network built with `reuse_blob_memory` returns tensors inside its pools, and an extractor that submitted a borrowed input returns caller storage. Model semantics determine whether FP32 interpretation is meaningful; the checks establish storage layout rather than semantic dtype.
+Light mode sets a graph restriction of its own: ncnn releases a bottom blob after its first consumer
+and refills it from its producer, so a blob that feeds several layers, including an input consumed
+twice, cannot run under light mode. `Net::shared_blobs` lists those blobs, and enabling light mode
+while the list is not empty returns `Error::Invalid`, both through the per-extractor setter and
+through a network whose options enable it.
 
-This path supports built-in CPU layers with safe configuration. Custom-layer registration, native path model loading (including optional mapping), or exporting a network/extractor raw handle permanently disables guard extraction for that object; exporting an options raw handle disables guard extraction in networks subsequently configured from those options. These conservative eligibility flags prevent custom allocators, callbacks, external output storage or raw extractor input from being mistaken for crate-managed dependencies. Final-vector extraction remains available. Raw-adopted inputs retain the provenance-protection copy in `input`. Native raw writers must also preserve all existing tensor and guard borrows.
+`extract` returns an `OutputGuard` with an exclusive extractor borrow. The guard owns and releases
+the returned native handle; its private tensor cannot escape as a slice or raw handle. Slices borrow
+the guard. The extractor and network therefore remain alive, and input replacement, re-extraction
+and destruction remain unavailable until the guard is dropped. Forgetting a guard can leak its
+handle but cannot extend a slice borrow. The guard exposes metadata, checked read-only FP32 views,
+explicit vector copying and `into_mat()`, which consumes the guard and takes the buffer the native
+extractor already detached.
+
+The guard forwards the checked readers rather than exposing `&Mat`, because `Mat::as_raw` is a safe
+call: a borrow of the tensor would let a caller take the native handle the guard releases on drop,
+which is a use-after-free the type system could not catch. `into_mat` copies only when the storage
+cannot be owned: a network built with `reuse_blob_memory` returns tensors inside its pools, and an
+extractor that submitted a borrowed input returns caller storage. Model semantics determine whether
+FP32 interpretation is meaningful; the checks establish storage layout rather than semantic dtype.
+
+This path supports built-in CPU layers with safe configuration. Custom-layer registration, native
+path model loading (including optional mapping), or exporting a network/extractor raw handle
+permanently disables guard extraction for that object; exporting an options raw handle disables
+guard extraction in networks subsequently configured from those options. These conservative
+eligibility flags prevent custom allocators, callbacks, external output storage or raw extractor
+input from being mistaken for crate-managed dependencies. Final-vector extraction remains available.
+Raw-adopted inputs retain the provenance-protection copy in `input`. Native raw writers must also
+preserve all existing tensor and guard borrows.
 
 The pinned native ownership audit covers these alias paths:
 
-- `src/c_api.cpp` creates a heap `Mat` by shallow-copying the extracted native `Mat`, even on extraction failure. Success transfers that handle to the guard; errors destroy it. `src/mat.h` increments the storage refcount on copy and frees through the recorded allocator only on final release.
-- `src/net.cpp` stores input by shallow assignment. Only initialized crate-created or deep-cloned storage is transferred without copying. External/raw-adopted storage is detached before submission, including caller-owned allocators.
-- Light mode releases cached intermediates and checks shared refcounts before in-place forwarding. Guard creation requires the network's only live extractor. A network-wide reservation blocks safe input, extraction and new extractors until guard destruction; this also covers model-owned aliases and allocator state beyond the current cache. Existing peers cause guard creation to fail, and dropping peers permits recovery. Forgetting an extractor conservatively prevents subsequent guards; forgetting a guard leaks its handle and permanently reserves the network. Neither case permits native reuse through safe inference APIs.
-- The guard's lifetime comes from `&mut Extractor`, and that extractor holds `&Net`; its private owned `Mat` releases the handle before either resource can die. The phantom borrow records this reservation without storing a second reference. An explicit guard destructor makes Rust drop checking retain that borrow through implicit handle destruction, even when the guard is otherwise unused. Safe methods expose neither the tensor nor its raw handle, and all slice lifetimes come from the guard. Advanced raw writers must preserve these borrows even if a raw input pointer was obtained before `input`.
+- `src/c_api.cpp` creates a heap `Mat` by shallow-copying the extracted native `Mat`, even on
+  extraction failure. Success transfers that handle to the guard; errors destroy it. `src/mat.h`
+  increments the storage refcount on copy and frees through the recorded allocator only on final
+  release.
+- `src/net.cpp` stores input by shallow assignment. Only initialized crate-created or deep-cloned
+  storage is transferred without copying. External/raw-adopted storage is detached before
+  submission, including caller-owned allocators.
+- Light mode releases cached intermediates and checks shared refcounts before in-place forwarding.
+  Guard creation requires the network's only live extractor. A network-wide reservation blocks safe
+  input, extraction and new extractors until guard destruction; this also covers model-owned aliases
+  and allocator state beyond the current cache. Existing peers cause guard creation to fail, and
+  dropping peers permits recovery. Forgetting an extractor conservatively prevents subsequent
+  guards; forgetting a guard leaks its handle and permanently reserves the network. Neither case
+  permits native reuse through safe inference APIs.
+- The guard's lifetime comes from `&mut Extractor`, and that extractor holds `&Net`; its private
+  owned `Mat` releases the handle before either resource can die. The phantom borrow records this
+  reservation without storing a second reference. An explicit guard destructor makes Rust drop
+  checking retain that borrow through implicit handle destruction, even when the guard is otherwise
+  unused. Safe methods expose neither the tensor nor its raw handle, and all slice lifetimes come
+  from the guard. Advanced raw writers must preserve these borrows even if a raw input pointer was
+  obtained before `input`.
 
-`input` applies the same storage-provenance check to every tensor it receives, and an error leaves the inputs already submitted in place, so a caller that retries continues from the failing entry. Final-vector output methods retain independent Rust storage; `extract_mat` with either `TensorWidth` and `OutputGuard::into_mat` retain independent native storage without a second copy.
+`input` applies the same storage-provenance check to every tensor it receives, and an error leaves
+the inputs already submitted in place, so a caller that retries continues from the failing entry.
+Final-vector output methods retain independent Rust storage; `extract_mat` with either `TensorWidth`
+and `OutputGuard::into_mat` retain independent native storage without a second copy.
 
-Low-copy describes omission of the wrapper's final deep clone. A null native allocator or different data pointer does not prove output independence. Native extraction shallow-assigns cached tensors, including input-blob aliases; consuming a Rust input does not remove those native references. Final vectors copy logical values instead of certifying output independence from allocator identity. The installed 20261020 `Extractor::extract` performs type-0 unpacking, supported precision conversions, and a deep clone whenever the result comes from the network's own local blob pool, which is the default: that clone detaches the tensor from the pool so it can outlive the network, and it is the only copy the owned forms pay. The wrapper takes that detached buffer as the owned `Mat`, so `extract_mat` with either width and `into_mat` add no copy on top of it. A network built with `reuse_blob_memory` installs its own blob allocator, which skips the native detach clone, and an extractor with a borrowed input returns caller storage; both cases copy inside the wrapper instead so the owned tensor stays independent of the pools and the caller. Packing, light mode and local-pool defaults are unchanged. Guard access does not promise pointer identity for computed outputs or bypass these native operations. Input-blob extraction can retain the transferred input pointer; padded channels still require channel views.
+Low-copy describes omission of the wrapper's final deep clone. A null native allocator or different
+data pointer does not prove output independence. Native extraction shallow-assigns cached tensors,
+including input-blob aliases; consuming a Rust input does not remove those native references. Final
+vectors copy logical values instead of certifying output independence from allocator identity.
+
+The installed 20261020 `Extractor::extract` performs type-0 unpacking, supported precision
+conversions, and a deep clone whenever the result comes from the network's own local blob pool,
+which is the default: that clone detaches the tensor from the pool so it can outlive the network,
+and it is the only copy the owned forms pay. The wrapper takes that detached buffer as the owned
+`Mat`, so `extract_mat` with either width and `into_mat` add no copy on top of it.
+
+A network built with `reuse_blob_memory` installs its own blob allocator, which skips the native
+detach clone, and an extractor with a borrowed input returns caller storage; both cases copy inside
+the wrapper instead, so the owned tensor stays independent of the pools and the caller. Packing,
+light mode and local-pool defaults are unchanged. Guard access does not promise pointer identity for
+computed outputs or bypass these native operations. Input-blob extraction can retain the transferred
+input pointer; padded channels still require channel views.
 
 Model files are trusted native input. The `DataReader` handle either owns a copy of the bytes or
-owns an open file, clamps every read to the bytes that remain, and scans parameter text, which is how
-`ParamSource::Reader` and `WeightSource::Reader` reach the same native parsers as the byte sources,
-and the file reader keeps the file open until it drops. `ParamSource::File` and `WeightSource::File`
-hand the path to the native stdio loaders, so a model never passes through a Rust buffer and the peak
-allocation stays at the per-layer copies ncnn keeps. `load_model_file_native` opts into mapped loading and stays
-unsafe because the mapping has to outlive the network. Safe file APIs use Rust paths and file reads on both platforms. The explicit unsafe `load_model_file_native` method calls the native narrow/wide path API and honors mapped loading; the caller keeps the file contents and length stable until the network is cleared or destroyed. Native allocation failure may terminate the process in upstream allocation paths.
+owns an open file, clamps every read to the bytes that remain, and scans parameter text, which is
+how `ParamSource::Reader` and `WeightSource::Reader` reach the same native parsers as the byte
+sources. The file reader keeps the file open until it drops.
+
+`ParamSource::File` and `WeightSource::File` hand the path to the native stdio loaders, so a model
+never passes through a Rust buffer and the peak allocation stays at the per-layer copies ncnn keeps.
+Those safe loaders reject a path that is not UTF-8, because the stdio loader receives UTF-8.
+`load_model_file_native` opts into mapped loading through the native narrow/wide path API and stays
+unsafe because the mapping has to outlive the network: the caller keeps the file contents and length
+stable until the network is cleared or destroyed. Native allocation failure may terminate the
+process in upstream allocation paths.
 
 ## Borrowed inputs and zero copy
 
 `Mat::from_external` builds a native tensor over caller storage through the ncnn external
-constructors, which record no refcount and never free the buffer. `Extractor::input_borrowed` submits
-that tensor without a copy, and `Input::borrowed` keeps the borrow inside one call: the tensors,
-the extractor and every native reference die before the function returns.
-`Net::infer_into` adds the reusable output buffer, so a steady-state request allocates no data
-buffers in either direction. Both unsafe entry points require the storage to stay alive, keep its
-length and stay free of mutable aliases until the extractor drops, because ncnn stores inputs by
-shallow assignment.
+constructors, which record no refcount and never free the buffer. `Extractor::input_borrowed`
+submits that tensor without a copy, and `Input::borrowed` keeps the borrow inside one call: the
+tensors, the extractor and every native reference die before the function returns. `Net::infer_into`
+adds the reusable output buffer, so a steady-state request allocates no data buffers in either
+direction. Both unsafe entry points require the storage to stay alive, keep its length and stay free
+of mutable aliases until the extractor drops, because ncnn stores inputs by shallow assignment.
 
 A borrowed input requires light mode to be off. The native forward path reads the storage refcount
 before it lets an in-place layer write, and an external tensor has no such counter, so the wrapper
-rejects the combination with `Error::Invalid` instead of reaching that read. Owned input keeps working
-under light mode, because transferred storage carries a refcount.
+rejects the combination with `Error::Invalid` instead of reaching that read. Owned input keeps
+working under light mode, because transferred storage carries a refcount.
 
 ncnn clones the bottom tensor before an in-place layer whenever the cached storage is shared, so a
 borrowed input is read and not written. A test asserts that the caller slice is unchanged after an
@@ -108,24 +205,32 @@ when a tensor outlives the request or is shared between extractors.
 
 ## Graph description
 
-`Net::layers` and `Net::blobs` read the loaded graph through the adapter and copy every string, so the
-result survives later loads and extraction. Both calls require loaded parameters and weights, because
-the parameter text alone does not fix the layer instances. `LayerInfo` reports the registered type
-index, the blob counts on both sides, the shape each layer recorded for its inputs and outputs, and
-every support flag ncnn declares for a layer type, including the
-packing, INT8, tensor-storage and batch declarations; those flags describe the type rather than the
-kernel a graph selects at run time. A layer that recorded no shape reports zero extents instead of
-failing the call. `layer_type_index` resolves a type name to the index those views report, which is
-the index that type-index registration replaces. `BlobInfo` reports the wiring, the recorded shape and
-`has_shape`, and the extents stay at zero until a graph resize or an input fixes the shape.
-`Net::layer_handle` returns a `GraphLayer` guard around the layer the graph owns at an index, which
-reaches the raw layer calls: the support flags, the userdata and the weight loading. The guard
-releases the C handle on drop, while the layer stays with the network, and a registered custom layer
-keeps the userdata its registration holds.
+`Net::layers` and `Net::blobs` read the loaded graph through the adapter and copy every string, so
+the result survives later loads and extraction. Both calls require loaded parameters and weights,
+because the parameter text alone does not fix the layer instances.
+
+`LayerInfo` reports the registered type index, the blob counts on both sides, the shape each layer
+recorded for its inputs and outputs, and every support flag ncnn declares for a layer type,
+including the packing, INT8, tensor-storage and batch declarations. Those flags describe the type
+rather than the kernel a graph selects at run time, and a layer that recorded no shape reports zero
+extents instead of failing the call. `layer_type_index` resolves a type name to the index those
+views report, which is the index that type-index registration replaces.
+
+`BlobInfo` reports the wiring, the recorded shape and `has_shape`, and the extents stay at zero
+until a graph resize or an input fixes the shape. `Net::layer_handle` returns a `GraphLayer` guard
+around the layer the graph owns at an index, which reaches the raw layer calls: the support flags,
+the userdata and the weight loading. The guard releases the C handle on drop, while the layer stays
+with the network, and a registered custom layer keeps the userdata its registration holds.
 
 ## Tensors
 
-Safe tensors expose immutable data. `as_f32_slice` borrows only aligned, contiguous, unpacked 32-bit storage; `channel_f32` skips inter-channel padding. The borrow ends before the tensor can be dropped or consumed. Raw/native writers preserve these Rust borrows. Reshape and normalization operate on independent copies. Logical channel contents are copied separately from channel padding. Dimensions, element counts, and integer conversions are checked before allocation. `to_f32` explicitly selects FP32 interpretation and checks 32-bit scalar storage, pack 1, and batch 1; native metadata alone carries no complete scalar type tag.
+Safe tensors expose immutable data. `as_f32_slice` borrows only aligned, contiguous, unpacked 32-bit
+storage; `channel_f32` skips inter-channel padding. The borrow ends before the tensor can be dropped
+or consumed. Raw/native writers preserve these Rust borrows. Reshape and normalization operate on
+independent copies. Logical channel contents are copied separately from channel padding. Dimensions,
+element counts, and integer conversions are checked before allocation. `to_f32` explicitly selects
+FP32 interpretation and checks 32-bit scalar storage, pack 1, and batch 1; native metadata alone
+carries no complete scalar type tag.
 
 `to_f32_typed` accepts an `ElementKind` and converts packed or narrow storage: signed and unsigned
 8-bit, signed 16-bit, signed 32-bit, IEEE half and bfloat16. ncnn records the element width but not
@@ -141,33 +246,39 @@ of a two-dimensional one, and a five-channel tensor of single-element planes rea
 padding.
 
 Extraction converts packed, FP16, BF16 and INT8 storage to FP32 unless the caller asks for stored
-storage. `Extractor::extract` with `TensorWidth::Stored` keeps the
-layout the producing layer wrote, so `TensorInfo` reports the stored element width and the typed
-readers apply, while `TensorWidth::Fp32` and the owned forms return converted values. The guarded borrow needs safe configuration and built-in layers; it
-also serves Vulkan networks, whose extraction downloads into network-owned CPU storage and detaches
-that copy from the pool allocator.
+storage. `Extractor::extract` with `TensorWidth::Stored` keeps the layout the producing layer wrote,
+so `TensorInfo` reports the stored element width and the typed readers apply, while
+`TensorWidth::Fp32` and the owned forms return converted values. The guarded borrow needs safe
+configuration and built-in layers; it also serves Vulkan networks, whose extraction downloads into
+network-owned CPU storage and detaches that copy from the pool allocator.
 
-Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw` transfers release responsibility to the caller. All FFI calls using these handles require unsafe code.
+Raw adoption requires initialized logical elements and live allocator dependencies. Raw-pointer
+users preserve native aliasing rules. A borrowed raw handle transfers no ownership. `into_raw`
+transfers release responsibility to the caller. All FFI calls using these handles require unsafe
+code.
 
 `Mat::channel`, `channel_range`, `depth`, `depth_range`, `column_range`, `row_range`, `batch` and
 `batch_range` return a `MatView`, a read-only alias of part of the tensor. The view borrows the
 source, so the source outlives it and cannot be mutated while it lives; it drops the native header
 without releasing storage, because a sub view carries no refcount. Each call range-checks the axis
-against the extents the tensor records, and a view that reaches an extractor copies, since an alias
-keeps no storage of its own. The borrowed path does not copy: `MatView::as_mat` exposes the aliased
-tensor for `Extractor::input_borrowed`, and `Input::view` runs one request over sub views and
-appends the outputs to a caller buffer. That call creates and drops the extractor itself, so the
-borrow of the sources covers every native read and no aliasing escapes; it requires light mode off,
-like every other borrowed input. `Mat::is_empty` reports a tensor whose storage was never created,
-`TensorInfo::total` reports the native storage slots including padding, and `TensorInfo::shape`
-reports the four extents in native axis order.
+against the extents the tensor records.
+
+The borrowed path does not copy: `MatView::as_mat` exposes the aliased tensor for
+`Extractor::input_borrowed`, and `Input::view` runs one request over sub views and appends the
+outputs to a caller buffer. That call creates and drops the extractor itself, so the borrow of the
+sources covers every native read and no aliasing escapes; it requires light mode off, like every
+other borrowed input.
+
+`Mat::is_empty` reports a tensor whose storage was never created, `TensorInfo::total` reports the
+native storage slots including padding, and `TensorInfo::shape` reports the four extents in native
+axis order.
 
 `fill`, `normalize_in_place` and `into_normalized` write through the tensor, so they accept only
-storage this crate owns: an adopted raw handle or an external buffer is refused with `Error::Invalid`,
-and `deep_clone` produces a writable copy. The rule keeps a caller-managed allocation out of reach of
-a native writer. `into_normalized` and `into_reshape` consume the tensor, which is what makes the
-mutation sound: no other reference to the storage exists afterwards, so the native call runs on it
-instead of on a duplicate.
+storage this crate owns: an adopted raw handle or an external buffer is refused with
+`Error::Invalid`, and `deep_clone` produces a writable copy. The rule keeps a caller-managed
+allocation out of reach of a native writer. `into_normalized` and `into_reshape` consume the tensor,
+which is what makes the mutation sound: no other reference to the storage exists afterwards, so the
+native call runs on it instead of on a duplicate.
 
 The normalization applies the scale and bias that the native `Scale` path derives from `mean` and
 `norm`, which is `value * norm` with `-mean * norm` as the bias per channel, and `value - mean` when
@@ -184,54 +295,116 @@ batched request is a throughput decision rather than a graph restriction.
 unpacked FP32 single-batch plane per channel, a stride of at least one row and a buffer of
 `stride * height` bytes, so a wider stride keeps its remaining bytes untouched. Pixel input stays
 with `PixelImage`, which validates the format, the stride and the rectangle before conversion or
-resizing. `copy_make_border` and `copy_cut_border` run the native padding and crop kernels,
-require a 2-D or 3-D unpacked single-batch tensor and reject a border that leaves no rows or columns.
-The native border copy returns no status, so the wrapper checks the arguments up front and reports an
+resizing. `copy_make_border` and `copy_cut_border` run the native padding and crop kernels, require
+a 2-D or 3-D unpacked single-batch tensor and reject a border that leaves no rows or columns. The
+native border copy returns no status, so the wrapper checks the arguments up front and reports an
 empty result as `Error::Native`.
 
 ## Advanced resources
 
-`Layer` owns its pipeline options and attempts pipeline destruction before destroying its handle. Parameter loading, weight loading, and execution are unsafe because each layer has its own tensor and parameter contract. ModelBin and reader handles retain their owned backing storage. A ModelBin cursor is consumed by native loading; callers provide the number and formats of weights expected by the layer.
+`Layer` owns its pipeline options and attempts pipeline destruction before destroying its handle.
+Parameter loading, weight loading, and execution are unsafe because each layer has its own tensor
+and parameter contract. ModelBin and reader handles retain their owned backing storage. A ModelBin
+cursor is consumed by native loading; callers provide the number and formats of weights expected by
+the layer.
 
-`PoolAllocator` provides RAII ownership for advanced FFI use. Objects allocated through its raw handle are released before the allocator. `Options` can attach one pool for intermediate blobs, workspace or the attention KV cache, and those setters are unsafe because the native option block stores the handle without taking ownership: the pool must outlive every network configured from that block and must not be shared with a concurrent network. Custom-layer creators, destroyers, callbacks, and userdata remain available through `sys`; contexts remain alive until all native users are destroyed. Callback implementations contain Rust panics and satisfy upstream output ownership rules.
+`PoolAllocator` provides RAII ownership for advanced FFI use. Objects allocated through its raw
+handle are released before the allocator. `Options` can attach one pool for intermediate blobs,
+workspace or the attention KV cache, and those setters are unsafe because the native option block
+stores the handle without taking ownership: the pool must outlive every network configured from that
+block and must not be shared with a concurrent network. Custom-layer creators, destroyers,
+callbacks, and userdata remain available through `sys`; contexts remain alive until all native users
+are destroyed. Callback implementations contain Rust panics and satisfy upstream output ownership
+rules.
 
-The wrapper types remain thread-affine. Native runtime queries are separate from object sharing. CPU worker-affinity changes and raw callback synchronization remain application-managed advanced operations. OS processor identities are value types. Current-thread affinity acts on the caller only, with a group-local mask on Windows; native worker masks retain their upstream capacity and scheduling semantics.
+The wrapper types remain thread-affine. Native runtime queries are separate from object sharing. CPU
+worker-affinity changes and raw callback synchronization remain application-managed advanced
+operations. OS processor identities are value types. Current-thread affinity acts on the caller
+only, with a group-local mask on Windows; native worker masks retain their upstream capacity and
+scheduling semantics.
 
 ## Vulkan ownership
 
-Optional Vulkan devices share a process-owned native runtime and cached device objects. Initialization is serialized and exit cleanup precedes driver teardown; no safe manual shutdown is exposed. Networks retain their device handles across configuration and clear/reload, and reject selection after parameter loading. Device, network and extractor handles remain single-thread-affine. Raw sys users must not destroy or replace the runtime, devices or Vulkan allocators while wrapper objects or work remain alive. Ordinary inputs use CPU Mat storage and ordinary extraction synchronizes and detaches outputs. CPU extractor guarded views reject GPU networks because their low-copy proof is CPU-only. Completed resident tensor guards use the separate contract below. Native unsupported layers may execute on CPU; Vulkan selection is not an all-GPU guarantee.
-
+Optional Vulkan devices share a process-owned native runtime and cached device objects.
+Initialization is serialized and exit cleanup precedes driver teardown; no safe manual shutdown is
+exposed. Networks retain their device handles across configuration and clear/reload, and reject
+selection after parameter loading. Device, network and extractor handles remain
+single-thread-affine. Raw sys users must not destroy or replace the runtime, devices or Vulkan
+allocators while wrapper objects or work remain alive. Ordinary inputs use CPU Mat storage and
+ordinary extraction synchronizes and detaches outputs. CPU extractor guarded views reject GPU
+networks because their low-copy proof is CPU-only. Completed resident tensor guards use the separate
+contract below. Native unsupported layers may execute on CPU; Vulkan selection is not an all-GPU
+guarantee.
 
 ## Resident Vulkan resources
 
-`Device::allocator` creates a thread-affine arena with blob and staging allocators. `Allocator::upload` accepts unpacked FP32 Mat storage and completes its transfer before returning a `Tensor`. Tensors retain their allocator; allocators retain the device and process runtime. `Allocator::command(&net)` borrows the configured network. `Command::input` borrows resident inputs, and `extract` records detached FP32 outputs, returning indices. Consuming `wait` submits once and blocks until native fence completion before exposing the output vector. Tensor downloads synchronize and return independent CPU Mats. `Tensor::guard` only borrows completed storage; no mapped pointer is exposed.
+`Device::allocator` creates a thread-affine arena with blob and staging allocators.
+`Allocator::upload` accepts unpacked FP32 Mat storage and completes its transfer before returning a
+`Tensor`. Tensors retain their allocator; allocators retain the device and process runtime.
+`Allocator::command(&net)` borrows the configured network. `Command::input` borrows resident inputs,
+and `extract` records detached FP32 outputs, returning indices. Consuming `wait` submits once and
+blocks until native fence completion before exposing the output vector. Tensor downloads synchronize
+and return independent CPU Mats. `Tensor::guard` only borrows completed storage; no mapped pointer
+is exposed.
 
-The native recording owner is destroyed before retained intermediate tensors. Native input or extraction recording failures poison the command: later recording and `wait` fail, and consuming or dropping the owner cancels the partial recording without submission. Input borrows are retained even when native recording fails. Host-only validation errors do not poison otherwise valid recordings. Dropping an unsubmitted command cancels recording and releases its resources. Forgetting a command intentionally leaks its native recording and inaccessible outputs; it does not submit work or expose unfinished storage. Network mutation and input destruction are prevented while the recording owner remains usable. The existing ten compile-fail tests cover CPU ownership/view contracts; the GPU command compile-fail test rejects network mutation while a recording remains usable. The consolidated GPU runtime contract covers recorded-work cancellation, allocator retention, completed guards, imports and cache persistence.
+The native recording owner is destroyed before retained intermediate tensors. Native input or
+extraction recording failures poison the command: later recording and `wait` fail, and consuming or
+dropping the owner cancels the partial recording without submission. Input borrows are retained even
+when native recording fails. Host-only validation errors do not poison otherwise valid recordings.
+Dropping an unsubmitted command cancels recording and releases its resources. Forgetting a command
+intentionally leaks its native recording and inaccessible outputs; it does not submit work or expose
+unfinished storage. Network mutation and input destruction are prevented while the recording owner
+remains usable. The existing ten compile-fail tests cover CPU ownership/view contracts; the GPU
+command compile-fail test rejects network mutation while a recording remains usable. The
+consolidated GPU runtime contract covers recorded-work cancellation, allocator retention, completed
+guards, imports and cache persistence.
 
-The pinned `VkCompute::submit_and_wait` includes deferred host transfers/conversions after fence completion. There is no supported nonblocking submit/poll adapter: raw queue submission alone would skip required completion work. `Command` is therefore an explicit recording/blocking-completion API, not an asynchronous executor. Native allocation and conversion failures return errors; adapter exceptions do not cross the C ABI.
+The pinned `VkCompute::submit_and_wait` includes deferred host transfers/conversions after fence
+completion. There is no supported nonblocking submit/poll adapter: raw queue submission alone would
+skip required completion work. `Command` is therefore an explicit recording/blocking-completion API,
+not an asynchronous executor. Native allocation and conversion failures return errors; adapter
+exceptions do not cross the C ABI.
 
-`Device::raw_device_handle` borrows ncnn's VkDevice without transferring ownership. Unsafe `Allocator::import_buffer` imports one-dimensional unpacked FP32 storage allocated on exactly this device, with valid storage/transfer usage, compatible memory and queue ownership, padded capacity, aligned offset and correct access/stage state. The caller keeps storage alive through every tensor and pending command, synchronizes external queues, and prevents external mutation during Rust use. `TensorGuard::buffer_descriptor` is unsafe for the same interoperability reasons. A copied descriptor carries no ownership or lifetime enforcement. Import does not adopt or free the buffer. Arbitrary caller-owned VkDevice adoption is unavailable because the pinned VulkanDevice has no adoption constructor.
+`Device::raw_device_handle` borrows ncnn's VkDevice without transferring ownership. Unsafe
+`Allocator::import_buffer` imports one-dimensional unpacked FP32 storage allocated on exactly this
+device, with valid storage/transfer usage, compatible memory and queue ownership, padded capacity,
+aligned offset and correct access/stage state. The caller keeps storage alive through every tensor
+and pending command, synchronizes external queues, and prevents external mutation during Rust use.
+`TensorGuard::buffer_descriptor` is unsafe for the same interoperability reasons. A copied
+descriptor carries no ownership or lifetime enforcement. Import does not adopt or free the buffer.
+Arbitrary caller-owned VkDevice adoption is unavailable because the pinned VulkanDevice has no
+adoption constructor.
 
-Cache persistence uses native device/driver compatibility metadata, shader-source identities, lengths and payload hashes. Truncated files, incompatible headers and payload corruption are rejected. The consolidated contract loads a valid saved cache and then rejects truncations, a header mutation and a payload mutation. Cache files are disposable acceleration data, not trusted executable artifacts or authenticated input; applications use trusted local files. Saving uses an ordinary non-atomic file write, so interrupted files can require regeneration.
+Cache persistence uses native device/driver compatibility metadata, shader-source identities,
+lengths and payload hashes. Truncated files, incompatible headers and payload corruption are
+rejected. The consolidated contract loads a valid saved cache and then rejects truncations, a header
+mutation and a payload mutation. Cache files are disposable acceleration data, not trusted
+executable artifacts or authenticated input; applications use trusted local files. Saving uses an
+ordinary non-atomic file write, so interrupted files can require regeneration.
 
 ## Native allocation boundary
 
-Clone-preserving normalization checks wrapper-visible allocation failures and retains source independence. The native void normalization implementation performs internal allocations without exposing a complete recoverable failure status. These checks do not catch every native OOM. GPU download waits for completion and returns independent reference-counted host storage; removing a redundant post-download clone does not weaken default extraction independence, imported-buffer copying or cancellation synchronization. See the [Phase B evidence](performance.md).
+Clone-preserving normalization checks wrapper-visible allocation failures and retains source
+independence. The native void normalization implementation performs internal allocations without
+exposing a complete recoverable failure status. These checks do not catch every native OOM. GPU
+download waits for completion and returns independent reference-counted host storage; removing a
+redundant post-download clone does not weaken default extraction independence, imported-buffer
+copying or cancellation synchronization. See the [Phase B evidence](performance.md).
 
 ## Raw escape hatches
 
 `as_raw` on `Net`, `Extractor` and `Options` is unsafe. Each call permanently disables guard
 extraction for that object, since a raw handle allows native writers to bypass the borrows the
-guards rely on. The returned handle borrows the owning object and stays valid only while it is
-alive and unmodified. `Mat::into_raw` transfers release responsibility, and
-`Device::raw_device_handle`, `Allocator::import_buffer` and `TensorGuard::buffer_descriptor`
-expose native Vulkan objects with the same rule: the caller keeps the underlying storage alive,
-synchronized and unmodified for the whole Rust lifetime of every object derived from it.
+guards rely on. The returned handle borrows the owning object and stays valid only while it is alive
+and unmodified. `Mat::into_raw` transfers release responsibility, and `Device::raw_device_handle`,
+`Allocator::import_buffer` and `TensorGuard::buffer_descriptor` expose native Vulkan objects with
+the same rule: the caller keeps the underlying storage alive, synchronized and unmodified for the
+whole Rust lifetime of every object derived from it.
 
 The `sys` module carries ncnn's C ABI and no independent semver guarantee: it moves with this
 crate's version, so a raw call site tracks the safe crate's minor version rather than a version of
-its own. It is behind the `raw` feature because a generated binding surface is the part of this crate
-that cannot promise stability; the default build publishes no generated bindings at all.
+its own. It is behind the `raw` feature because a generated binding surface is the part of this
+crate that cannot promise stability; the default build publishes no generated bindings at all.
 
 ## Optional Vulkan coverage
 
@@ -243,13 +416,12 @@ payload hash corruption. FP32 extractor guards remain CPU-only; stored extractio
 networks.
 
 `NCNN_TEST_DEVICE=vulkan` attaches the default device to every conformance fixture, so the operator
-families, the graph pairs and every layer case (see [layer coverage](layer-coverage.md)) repeat on the
-GPU. One contract compares
-`Convolution`, `ConvolutionDepthWise` and `InnerProduct` with int8 weights, whose scale pushes `0.25`
-below one quantization step, against the float run on the host and against the device and
-resident-recording results. It also reads the quantized bytes back through stored extraction, both
-after an explicit `Quantize` layer and from requantizing convolutions, whose `8=101` scale term makes
-the convolution itself write one-byte output.
+families, the graph pairs and every layer case (see [layer coverage](layer-coverage.md)) repeat on
+the GPU. One contract compares `Convolution`, `ConvolutionDepthWise` and `InnerProduct` with int8
+weights, whose scale pushes `0.25` below one quantization step, against the float run on the host
+and against the device and resident-recording results. It also reads the quantized bytes back
+through stored extraction, both after an explicit `Quantize` layer and from requantizing
+convolutions, whose `8=101` scale term makes the convolution itself write one-byte output.
 
 ### Device memory exhaustion
 
@@ -276,6 +448,8 @@ and logs.
 
 ## Related pages
 
-- [native-abi.md](native-abi.md) records the adapter ABI, the upstream decisions and the runtime validation scope.
-- [layer-coverage.md](layer-coverage.md) records the conformance cases, the coverage table and the known native differences.
+- [native-abi.md](native-abi.md) records the adapter ABI, the upstream decisions and the runtime
+  validation scope.
+- [layer-coverage.md](layer-coverage.md) records the conformance cases, the coverage table and the
+  known native differences.
 - [troubleshooting.md](troubleshooting.md) maps symptoms to fixes.

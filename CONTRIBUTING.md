@@ -117,7 +117,7 @@ requests.
 |---|---|---|
 | Rust | rustfmt (`rustfmt.toml`) | `cargo fmt --all` |
 | C++ adapters | clang-format (`.clang-format`) | `clang-format -i crates/ncnn-sys/native/*.cpp crates/ncnn-sys/native/*.h` |
-| Markdown, JSON, YAML | EditorConfig (`.editorconfig`) | Two-space indent, LF, final newline |
+| Markdown, JSON, YAML | EditorConfig (`.editorconfig`) | Two-space indent, LF, final newline; prose wrapped at 100 columns, tables and code blocks excepted |
 
 `rust-toolchain.toml` pins the stable channel with `rustfmt` and `clippy`; the MSRV job pins
 1.85.1 separately, so code that relies on a newer language feature breaks that job even when the

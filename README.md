@@ -18,8 +18,8 @@ The repository contains two packages:
   and `infer_stored` keeps the element width a layer wrote.
 - Batched tensors, layout rewriting with `flatten` and `with_packing`, and consuming helpers
   (`into_normalized`/`into_reshape`) that skip the copy when the caller owns the storage.
-- Zero-copy requests: `Mat::from_external`, `Extractor::input_borrowed` and `Input::borrowed`
-  submit caller memory without a copy.
+- Zero-copy requests: `Mat::from_external`, `Extractor::input_borrowed` and `Input::borrowed` submit
+  caller memory without a copy.
 - Graph introspection: `Net::layers` and `Net::blobs` report the wiring, the shapes and the support
   flags ncnn declares for each layer type, and `layer_type_index` resolves a type name to its index.
 - Scoped read-only CPU output guards that reserve the network without copying.
@@ -28,8 +28,8 @@ The repository contains two packages:
   normalization, pixel output, letterbox and depth borders, and affine warping.
 - Effective option readback on a loaded network, and caller-owned pools for blobs, workspace and the
   attention KV cache.
-- Optional Vulkan backend: device selection, resident tensors, allocator, recording
-  commands, completed guards, buffer import and persistent pipeline caches.
+- Optional Vulkan backend: device selection, resident tensors, allocator, recording commands,
+  completed guards, buffer import and persistent pipeline caches.
 - Explicit native configuration mapping without Rust-side hardware gating.
 
 ## Install
@@ -38,13 +38,13 @@ The repository contains two packages:
 cargo add ncnn-rust
 ```
 
-The crates ship Rust code only. Building them compiles the C++ adapters against an ncnn SDK that
-the build environment supplies, so the next section sets that SDK up.
+The crates ship Rust code only. Building them compiles the C++ adapters against an ncnn SDK that the
+build environment supplies, so the next section sets that SDK up.
 
 ## Build
 
-Cargo consumes an externally installed ncnn SDK. `NCNN_INSTALL_DIR` is required and must
-contain `include/ncnn` plus `lib`. Rust 1.85.1 is the tested MSRV.
+Cargo consumes an externally installed ncnn SDK. `NCNN_INSTALL_DIR` is required and must contain
+`include/ncnn` plus `lib`. Rust 1.85.1 is the tested MSRV.
 
 ```sh
 export NCNN_INSTALL_DIR=/absolute/path/to/ncnn-install
@@ -55,17 +55,16 @@ cargo run -p ncnn-rust --example add
 
 Required native features: `NCNN_C_API`, `NCNN_STDIO`, `NCNN_STRING`, `NCNN_PIXEL`,
 `NCNN_PIXEL_ROTATE`, `NCNN_PIXEL_AFFINE`, `NCNN_PIXEL_DRAWING`, `NCNN_BATCH`, `NCNN_INT8`,
-`NCNN_BF16`, `NCNN_VALIDATION`. The default build requires `NCNN_VULKAN=OFF`; the `vulkan`
-Cargo feature requires `NCNN_VULKAN=ON` and a shared SDK with its dependency closure.
+`NCNN_BF16`, `NCNN_VALIDATION`. The default build requires `NCNN_VULKAN=OFF`; the `vulkan` Cargo
+feature requires `NCNN_VULKAN=ON` and a shared SDK with its dependency closure.
 
-`NCNN_LINK_KIND` selects `static` (default) or `dylib`. A shared SDK also needs the directory
-that holds the shared library on the runtime loader path: `lib` through `LD_LIBRARY_PATH` or
-`DYLD_LIBRARY_PATH`, and the `bin` directory that CMake installs `ncnn.dll` into through `PATH`
-on Windows, where a static and an import library share the `ncnn.lib` name. `NCNN_EXTRA_LIBS`
-lists additional
-libraries in link order, optionally prefixed with `static=` or `dylib=`. `NCNN_EXTRA_LIB_DIRS` adds
-search directories. The SDK version is pinned to 20261020; `NCNN_ALLOW_UNTESTED_VERSION=1` builds
-against another release for compatibility checks.
+`NCNN_LINK_KIND` selects `static` (default) or `dylib`. A shared SDK also needs the directory that
+holds the shared library on the runtime loader path: `lib` through `LD_LIBRARY_PATH` or
+`DYLD_LIBRARY_PATH`, and the `bin` directory that CMake installs `ncnn.dll` into through `PATH` on
+Windows, where a static and an import library share the `ncnn.lib` name. `NCNN_EXTRA_LIBS` lists
+additional libraries in link order, optionally prefixed with `static=` or `dylib=`.
+`NCNN_EXTRA_LIB_DIRS` adds search directories. The SDK version is pinned to 20261020;
+`NCNN_ALLOW_UNTESTED_VERSION=1` builds against another release for compatibility checks.
 
 The `raw` feature exposes the generated bindings as `ncnn_rust::sys`. They carry ncnn's C ABI and no
 independent version policy, so the default build publishes none; the safe API is the surface that
@@ -151,9 +150,9 @@ let bytes: Vec<i8> = stored.to_i8()?;
 ```
 
 `Mat::from_typed` and `Mat::from_i8` build the same storage for an input side, and
-`Extractor::extract` with `TensorWidth::Stored` borrows it while one extractor runs. The
-[typed tensor example](crates/ncnn/examples/typed_tensors.rs) and the
-[resident Vulkan example](crates/ncnn/examples/vulkan_resident.rs) run end to end.
+`Extractor::extract` with `TensorWidth::Stored` borrows it while one extractor runs. The [typed
+tensor example](crates/ncnn/examples/typed_tensors.rs) and the [resident Vulkan
+example](crates/ncnn/examples/vulkan_resident.rs) run end to end.
 
 An extractor is safe to reuse: submitting an input restarts the request, so a second inference
 recomputes instead of returning the output the first one cached. Per-extractor settings cover what
@@ -174,9 +173,9 @@ of restarting the request. Light mode releases each intermediate after its first
 insert an explicit `Split` layer or keep light mode off.
 
 Part of a tensor is readable without copying it. A view aliases the source storage: the slice
-readers borrow it, `to_f32` copies out of it, and `Extractor::input` copies it because an alias keeps
-no storage of its own. `Input::view` reads the region where it lives, which is the zero-copy form
-for a model that takes a crop, a channel or one batch item:
+readers borrow it, `to_f32` copies out of it, and `Extractor::input` copies it because an alias
+keeps no storage of its own. `Input::view` reads the region where it lives, which is the zero-copy
+form for a model that takes a crop, a channel or one batch item:
 
 ```rust
 let mut buffer = Vec::new();
@@ -245,21 +244,22 @@ wrapper's fast shape is also its default shape.
 
 The forms that ask for a copy pay for one. A value vector per request allocates 256 KB on top of the
 native clone that `Extractor::extract` already performs, which costs 226 us on the guest against the
-10.9 us above, and a cloned input and output allocate two such buffers. [Performance](docs/performance.md)
-records both with their allocation counts, the native C references they compare against, and the
-glibc and NT heap behaviour that decides what a fresh 256 KB buffer costs.
-That is why the reuse forms exist: `NetBuilder::reuse_blob_memory()` moves the engine's intermediate
-tensors into pools it owns, `infer_into` removes the caller vector for owned and borrowed inputs, and
-`ncnn_rust::heap::retain_pages()` keeps a caller-allocated buffer's pages mapped on glibc. The
-per-helper preprocessing medians, the pooling comparison, the Linux page-fault campaign, the worker
-scaling and the reproduction commands are in [Performance](docs/performance.md).
+10.9 us above, and a cloned input and output allocate two such buffers.
+[Performance](docs/performance.md) records both with their allocation counts, the native C
+references they compare against, and the glibc and NT heap behaviour that decides what a fresh 256
+KB buffer costs. That is why the reuse forms exist: `NetBuilder::reuse_blob_memory()` moves the
+engine's intermediate tensors into pools it owns, `infer_into` removes the caller vector for owned
+and borrowed inputs, and `ncnn_rust::heap::retain_pages()` keeps a caller-allocated buffer's pages
+mapped on glibc. The per-helper preprocessing medians, the pooling comparison, the Linux page-fault
+campaign, the worker scaling and the reproduction commands are in
+[Performance](docs/performance.md).
 
 ## Documentation
 
-API documentation is generated by `.github/workflows/docs.yml` on every push to the default
-branch and published at <https://edwardssss.github.io/ncnn.rust/ncnn_rust/>. docs.rs cannot build this workspace: its sandbox has
-no ncnn SDK, and the build script compiles C++ adapters against the installed headers, so a
-missing `NCNN_INSTALL_DIR` fails before rustdoc starts.
+API documentation is generated by `.github/workflows/docs.yml` on every push to the default branch
+and published at <https://edwardssss.github.io/ncnn.rust/ncnn_rust/>. docs.rs cannot build this
+workspace: its sandbox has no ncnn SDK, and the build script compiles C++ adapters against the
+installed headers, so a missing `NCNN_INSTALL_DIR` fails before rustdoc starts.
 
 - [Documentation map](docs/README.md)
 - [Safety contracts](docs/contracts.md)

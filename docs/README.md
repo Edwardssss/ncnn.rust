@@ -28,6 +28,8 @@ or `rust-toolchain.toml` moves, `coverage.yml` runs weekly, `sdk-artifacts.yml` 
 ## Writing rules
 
 - State behaviour directly. Describe what the code does, not what it might do.
+- Wrap prose at 100 columns. Tables and code blocks keep their own layout, because a wrapped row
+  or command is harder to read than a long one.
 - Keep validation counts, machine details and log paths in the evidence appendix.
 - Prefer a table over prose when the content is a matrix.
 - Link the file that owns a topic instead of restating it.
