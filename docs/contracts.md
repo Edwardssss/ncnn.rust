@@ -308,7 +308,7 @@ and parameter contract. ModelBin and reader handles retain their owned backing s
 cursor is consumed by native loading; callers provide the number and formats of weights expected by
 the layer.
 
-`PoolAllocator` provides RAII ownership for advanced FFI use. Objects allocated through its raw
+`alloc::Pool` provides RAII ownership for advanced FFI use. Objects allocated through its raw
 handle are released before the allocator. `Options` can attach one pool for intermediate blobs,
 workspace or the attention KV cache, and those setters are unsafe because the native option block
 stores the handle without taking ownership: the pool must outlive every network configured from that

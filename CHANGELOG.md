@@ -58,6 +58,8 @@ library upgrade is a minor change of this crate.
 - `Mat::append_f32_to`, whose behaviour `Mat::to_f32_into` now has: it appends, leaves the vector
   untouched on failure, and keeps the capacity, so the replace form was the special case a caller
   writes with `clear()`.
+- `PoolAllocator`, which is now `alloc::Pool`: the crate carried two types called `Allocator` (the
+  CPU pool and `gpu::Allocator`), and the per-extractor and option setters read ambiguously.
 
 ## 0.3.0 - 2026-11-11
 
