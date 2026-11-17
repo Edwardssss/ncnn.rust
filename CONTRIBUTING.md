@@ -171,9 +171,9 @@ Preparing a release stays manual:
 2. Set `version` in the workspace manifest and in the `ncnn-rust-sys` dependency entry, run
    `python tools/check-versions.py`, and let the `Semver checks` job report whether the new version
    allows the changes it carries.
-3. Move the `Unreleased` entries of `CHANGELOG.md` under the new version heading, add the release
-   date and a fresh empty `Unreleased` section. The release body comes from that section, so a
-   version without one fails the release workflow.
+3. Replace `- Unreleased` in that version's `CHANGELOG.md` heading with the release date. The
+   release body is everything between that heading and the next one, so a version without a
+   section fails the release workflow after the packages are already published.
 4. Tag the commit and push the tag.
 
 Pushing a `v*` tag starts `.github/workflows/release.yml`:
