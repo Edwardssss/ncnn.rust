@@ -19,11 +19,13 @@ closure, and the tiers below stay inside `ncnn-rust`.
 | Introspection and host helpers | `Net::layers`, `Net::blobs`, `Net::shared_blobs`, `layer_type_index`, `LayerInfo`, `BlobInfo`, `ShapeInfo`, `image`, `heap`, `cpu` | Safe; no unsafe entry point |
 | Advanced adapters | `Layer`, `ModelBin`, `ParamDict`, `PoolAllocator`, `GraphLayer`, custom-layer registration | Unsafe where the native layer contract is the caller's, or permanently disables guard extraction |
 | Vulkan | `gpu::Device`, `DeviceInfo`, `Precision`, `Allocator`, `Tensor`, `Command`, `TensorGuard`, `BufferDescriptor`, pipeline cache | The safe subset; every object stays on the thread that created it |
-| Vulkan interop | `Allocator::import_buffer`, `TensorGuard::buffer_descriptor`, `Device::raw_device_handle` | `unsafe`; the caller owns the lifetime, synchronization and queue proof |
+| Vulkan interop | `Allocator::import_buffer`, `TensorGuard::buffer_descriptor` | `unsafe`; the caller owns the lifetime, synchronization and queue proof |
 | Raw bindings | `ncnn_rust::sys` | No independent semver guarantee; it moves with the safe crate's version |
 
-A new public item names its tier, and moving an item into an `unsafe` tier requires the contract text
-that justifies it. Behaviour that depends on the device, the driver or the linker is documented in
+`Device::raw_device_handle` is a safe call that returns a borrowed `u64` handle: calling it breaks no
+invariant, and what the caller does with the handle follows the interop contract. A new public item
+names its tier, and moving an item into an `unsafe` tier requires the contract text that justifies
+it. Behaviour that depends on the device, the driver or the linker is documented in
 the tier it belongs to rather than in the core section.
 
 ## Non-goals
@@ -223,6 +225,10 @@ alive and unmodified. `Mat::into_raw` transfers release responsibility, and
 `Device::raw_device_handle`, `Allocator::import_buffer` and `TensorGuard::buffer_descriptor`
 expose native Vulkan objects with the same rule: the caller keeps the underlying storage alive,
 synchronized and unmodified for the whole Rust lifetime of every object derived from it.
+
+The re-exported `sys` module carries ncnn's C ABI and no independent semver guarantee: it moves with
+this crate's version, so a raw call site tracks the safe crate's minor version rather than a version
+of its own.
 
 ## Optional Vulkan coverage
 

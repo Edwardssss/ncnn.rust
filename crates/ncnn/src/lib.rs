@@ -53,6 +53,11 @@ pub mod cpu;
 pub mod gpu;
 pub mod heap;
 pub mod image;
+/// Raw ncnn bindings and the project's C adapters.
+///
+/// These items follow ncnn's C ABI rather than the safe crate's contracts, and they carry no
+/// independent semver guarantee: they move with this crate's version. The invariants in the safety
+/// contracts apply when they are called directly.
 pub use ncnn_sys as sys;
 
 mod error;
