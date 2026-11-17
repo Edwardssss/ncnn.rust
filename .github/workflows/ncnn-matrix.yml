@@ -80,15 +80,18 @@ jobs:
           python3 tools/build-ncnn-sdk.py "vendor/ncnn-${{ matrix.version }}" "$NCNN_INSTALL_DIR" $flag
 
       # A hosted runner has no GPU, so the software rasteriser is the device, and the suite
-      # attaches it from NCNN_TEST_DEVICE. `default_device` panics when no device answers, and
-      # `vulkaninfo` states the same thing in a message that names the loader.
+      # attaches it from NCNN_TEST_DEVICE. The ICD is proven here for the same reason the job
+      # in `ci.yml` proves it: a missing device must not read as a pass.
       - name: Require a Vulkan device
         if: matrix.backend == 'vulkan' && matrix.version == needs.resolve.outputs.pinned
         run: |
           if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
             echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           fi
-          vulkaninfo --summary
+          summary="$(vulkaninfo --summary 2>&1)"
+          echo "$summary"
+          echo "$summary" | grep -q deviceName \
+            || { echo "no Vulkan device answered, so the GPU cases would not run" >&2; exit 1; }
 
       # The adapter is written against one release, so an older SDK cannot link it. Those rows
       # report which declarations the pinned header needs that the build lacks, which is the

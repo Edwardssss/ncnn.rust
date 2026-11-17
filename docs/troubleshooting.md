@@ -76,8 +76,9 @@ recorded in the [layer coverage](layer-coverage.md) page.
 **Cause:** no ICD is installed or the loader cannot see it.
 
 **Fix:** install the driver ICD, or use a software ICD such as Mesa lavapipe. `NCNN_TEST_DEVICE=vulkan`
-makes the conformance suite repeat on the default device, so a device-free machine skips nothing
-until that variable is set.
+makes the conformance suite repeat on the default device, and with that variable set the suite panics
+rather than skipping when no device answers, which is why the jobs that set it prove the device with
+`vulkaninfo --summary` first.
 
 ## A resident upload fails with `Vulkan upload returned -1`
 

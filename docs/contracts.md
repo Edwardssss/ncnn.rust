@@ -417,11 +417,13 @@ networks.
 
 `NCNN_TEST_DEVICE=vulkan` attaches the default device to every conformance fixture, so the operator
 families, the graph pairs and every layer case (see [layer coverage](layer-coverage.md)) repeat on
-the GPU. One contract compares `Convolution`, `ConvolutionDepthWise` and `InnerProduct` with int8
-weights, whose scale pushes `0.25` below one quantization step, against the float run on the host
-and against the device and resident-recording results. It also reads the quantized bytes back
-through stored extraction, both after an explicit `Quantize` layer and from requantizing
-convolutions, whose `8=101` scale term makes the convolution itself write one-byte output.
+the GPU. The hosted jobs that set it fail when `vulkaninfo` cannot name a device, so that repetition
+cannot be skipped while the job still passes. One contract compares `Convolution`,
+`ConvolutionDepthWise` and `InnerProduct` with int8 weights, whose scale pushes `0.25` below one
+quantization step, against the float run on the host and against the device and resident-recording
+results. It also reads the quantized bytes back through stored extraction, both after an explicit
+`Quantize` layer and from requantizing convolutions, whose `8=101` scale term makes the convolution
+itself write one-byte output.
 
 ### Device memory exhaustion
 

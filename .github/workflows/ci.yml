@@ -389,12 +389,19 @@ jobs:
           python3 tools/fetch-ncnn.py
           python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}" --vulkan
 
-      - name: Record Vulkan device
+      # A hosted runner has no GPU, so the software rasteriser is the device and the suite
+      # attaches it from NCNN_TEST_DEVICE. `vulkan_surface_contracts` returns early without a
+      # device, so a runner that lost lavapipe would read as a pass; the ICD is proven here
+      # instead, and the message names what is missing.
+      - name: Require a Vulkan device
         run: |
           if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
             echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           fi
-          vulkaninfo --summary || true
+          summary="$(vulkaninfo --summary 2>&1)"
+          echo "$summary"
+          echo "$summary" | grep -q deviceName \
+            || { echo "no Vulkan device answered, so the GPU cases would not run" >&2; exit 1; }
 
       - name: Test with the software Vulkan device
         env:
