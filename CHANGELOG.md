@@ -5,7 +5,7 @@ All notable changes to this project are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release pins one ncnn release, so a
 library upgrade is a minor change of this crate.
 
-## 0.4.0 - Unreleased
+## 0.4.0 - 2026-11-17
 
 ### Added
 
@@ -21,8 +21,7 @@ library upgrade is a minor change of this crate.
 
 - `extract_mat` with either width and `OutputGuard::into_mat` copy only when the storage cannot be owned: a
   network built with `NetBuilder::reuse_blob_memory` returns tensors inside its pools, and an
-  extractor that submitted a borrowed input returns caller storage. `OutputGuard::detach` keeps its
-  copying behaviour.
+  extractor that submitted a borrowed input returns caller storage.
 - The native request reference in `api_benchmark` now runs the options each wrapper row uses
   (`native-request` borrows its input and keeps light mode off, the owned variants enable it) and
   releases its input handle before the request. The request-path figures in the performance page were
@@ -34,7 +33,6 @@ library upgrade is a minor change of this crate.
   `infer_into` take an `Input`, which folds the owned, borrowed-slice and sub-view forms into them.
   The extractor request surface drops from eight methods to four and the network from six to three,
   and no capability is lost.
-
 - `Extractor::extract_owned` is now the sugar form of `extract_into`: it allocates the vector and
   delegates, so the FP32 conversion has one implementation instead of two.
 - The loading methods take a source instead of a parameter shape. `load_param` accepts
