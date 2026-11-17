@@ -10,17 +10,30 @@ results, machine details and reproduction logs live in the [evidence history](ev
 ## ncnn version matrix
 
 `ci/ncnn-versions.json` holds the pinned release and the dynamic entries the scheduled workflow
-resolves at run time. `.github/workflows/ncnn-matrix.yml` builds an SDK for each version. The pinned
-release runs the workspace tests, audits enabled C API declarations against generated bindings and
-defined symbols, and compares trained-model output with a native C++ reference built from the same
-SDK. Other entries report the declarations the pinned header needs that the build lacks, because the
-adapter is compiled against one release and cannot link another.
+resolves at run time. `.github/workflows/ncnn-matrix.yml` builds an SDK for each version and each
+backend. The pinned release runs the workspace tests, audits enabled C API declarations against
+generated bindings and defined symbols, and compares trained-model output with a native C++
+reference built from the same SDK. Other entries report the declarations the pinned header needs
+that the build lacks, because the adapter is compiled against one release and cannot link another.
+
+The Vulkan rows answer a question the C API report cannot: the adapter includes ncnn's C++ Vulkan
+headers (`gpu.h`, `pipelinecache.h`) and calls `ncnn::VulkanDevice`, the allocators, `VkCompute`,
+`VkMat` and the per-extractor allocator setters, none of which appear in `c_api.h`. Compiling the
+adapter against a release with `NCNN_VULKAN=1` is therefore the compatibility check for that
+surface, and a class, member or signature that moved names itself in the compiler diagnostic the
+row reports. The pinned Vulkan row also runs the Vulkan-gated suite on the software device, which is
+the only Vulkan device a hosted runner has.
 
 | Entry | Resolution | Requirement |
 |---|---|---|
-| `pinned` | `20261020` | Tests, C API audit and model comparison must pass |
-| `latest` | Newest tag that is not already listed | Declaration gap reported each run |
-| `previous` | Next distinct tag below that one | Declaration gap reported each run |
+| `pinned` | `20261020` | Tests, C API audit and model comparison must pass; the Vulkan row runs the Vulkan-gated suite |
+| `latest` | Newest tag that is not already listed | C API declaration gap and Vulkan build gap reported each run |
+| `previous` | Next distinct tag below that one | C API declaration gap and Vulkan build gap reported each run |
+
+A row that cannot compile reports the diagnostics instead of failing the matrix, because an older
+release is expected to lack what the pinned one has; only the pinned rows decide the run result. A
+diagnostic that names a symbol the adapter uses is the report: on the first dispatch after an ncnn
+release moves that surface, the row states which declaration changed.
 
 Because the pinned release is the newest tag today, `latest` and `previous` resolve to the two
 releases below it, so the matrix records how far back the pinned headers reach. A failure in a
