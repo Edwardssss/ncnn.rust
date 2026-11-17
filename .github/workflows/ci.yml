@@ -63,24 +63,24 @@ jobs:
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "PATH=C:\Program Files\LLVM\bin;$env:NCNN_INSTALL_DIR\bin;$env:PATH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - name: Provide python3 on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
+      # One interpreter name per runner: the Windows image ships python.exe while the
+      # Unix images ship python3, so the tool scripts take the resolved name.
+      - name: Resolve Python
+        id: python
+        shell: bash
         run: |
-          # The tool scripts use python3 so one command works on every runner.
-          if (!(Get-Command python3 -ErrorAction SilentlyContinue)) {
-            $source = (Get-Command python).Source
-            Copy-Item $source (Join-Path (Split-Path $source) 'python3.exe')
-          }
-          python3 --version
+          cmd=python3
+          command -v python3 >/dev/null 2>&1 || cmd=python
+          echo "cmd=$cmd" >> "$GITHUB_OUTPUT"
+          "$cmd" --version
 
       - name: Fetch pinned ncnn source
         if: steps.sdk-cache.outputs.cache-hit != 'true'
-        run: python3 tools/fetch-ncnn.py
+        run: ${{ steps.python.outputs.cmd }} tools/fetch-ncnn.py
 
       - name: Build ncnn SDK
         if: steps.sdk-cache.outputs.cache-hit != 'true'
-        run: python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
+        run: ${{ steps.python.outputs.cmd }} tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
 
       - name: Format
         if: runner.os == 'Linux'
@@ -142,7 +142,7 @@ jobs:
 
       - name: Version consistency
         if: runner.os == 'Linux'
-        run: python3 tools/check-versions.py
+        run: ${{ steps.python.outputs.cmd }} tools/check-versions.py
 
       # Publish dry runs are the release gate: they package, rebuild from the archive
       # and validate the registry metadata for both packages. The main package is
