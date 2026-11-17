@@ -3,6 +3,21 @@
 Dated campaign records behind the conclusions in [Platform support](support-matrix.md). Each
 section names the machine, the command and the outcome. Numbers describe that campaign only.
 
+## 2026-11-17 pre-release campaign
+
+Windows 10 host, MSVC 14.50, ncnn 20261020, shared SDKs. The SDK artifacts workflow built and
+published the four archives on `ubuntu-latest`, `windows-latest` and `macos-15`; installing the
+Windows CPU archive through `tools/install-sdk.py` and building against it passed the suite: 54
+conformance cases, 3 CPU cases, 2 heap cases and 15 doctests, which is what makes the archives a
+substitute for a local ncnn build rather than a convenience.
+
+The version matrix ran its Vulkan axis for the first time over `20260113`, `20260526` and
+`20261020`. All six rows passed, so the C++ Vulkan adapter compiles against all three releases, and
+the pinned row attached `llvmpipe (LLVM 21.1.8, 256 bits)` through `NCNN_TEST_DEVICE=vulkan` and
+passed 54 conformance cases and the four Vulkan contracts. The same host re-ran the request-path and
+helper benchmarks against the 0.4.0 API; the ranking and the mechanism held while the absolute values
+sat 7 to 20% above the recorded campaign, which the [performance report](performance.md) notes.
+
 ## CPU and Vulkan validation campaign
 
 Current shared and static Windows Vulkan and CPU-only checks plus Debian WSL llvmpipe are recorded

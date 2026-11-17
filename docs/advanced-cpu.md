@@ -1,11 +1,12 @@
 # Advanced CPU adapters
 
-All functions below are exported through `ncnn_rust::sys`. Raw calls use the selected native library
-instance. Input handles remain live for the call; borrowed storage, allocator dependencies, readers,
-and callback contexts remain live for every subsequent native use. Mutable operations require
-exclusive access to affected native state. Image buffers contain initialized bytes, satisfy native
-dimensions and strides, and are disjoint unless the native operation supports aliasing. Native C++
-helpers returning `void` retain their upstream failure semantics.
+The functions below are the generated bindings, exported as `ncnn_rust::sys` through the `raw`
+feature. Raw calls use the selected native library instance. Input handles remain live for the call;
+borrowed storage, allocator dependencies, readers, and callback contexts remain live for every
+subsequent native use. Mutable operations require exclusive access to affected native state. Image
+buffers contain initialized bytes, satisfy native dimensions and strides, and are disjoint unless the
+native operation supports aliasing. Native C++ helpers returning `void` retain their upstream failure
+semantics.
 
 ## Runtime
 
