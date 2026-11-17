@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Build an ncnn SDK from a source tree with the project patches applied.
 
-Usage: build-ncnn-sdk.py <source-dir> <install-prefix> [--vulkan] [--no-patches]
+Usage: build-ncnn-sdk.py <source-dir> <install-prefix> [--vulkan] [--link-kind shared|static]
+                         [--no-patches]
 
 The workflow builds the same feature set that ncnn-rust requires, so a missing
 feature fails the compatibility job instead of silently changing the ABI surface.
+`--link-kind` selects what the SDK ships: the shared library most jobs link
+against, or the static one `NCNN_LINK_KIND=static` resolves.
 The patches in tools/patches fix two upstream defects with observable results:
 Vulkan Cast advertises conversions it has no shader for, and the Linux sibling
 parser truncates CPU masks to 32 bits. Applying them keeps every SDK built here
@@ -33,7 +36,6 @@ FEATURES = [
     "NCNN_BUILD_EXAMPLES=OFF",
     "NCNN_BUILD_BENCHMARK=OFF",
     "NCNN_BUILD_TESTS=OFF",
-    "NCNN_SHARED_LIB=ON",
     "NCNN_OPENMP=OFF",
 ]
 
@@ -103,6 +105,12 @@ def main() -> int:
     parser.add_argument("source", type=pathlib.Path)
     parser.add_argument("prefix", type=pathlib.Path)
     parser.add_argument("--vulkan", action="store_true")
+    parser.add_argument(
+        "--link-kind",
+        choices=("shared", "static"),
+        default="shared",
+        help="Ship the shared library (default) or the static one",
+    )
     parser.add_argument("--no-patches", action="store_true", help="Build the unmodified tree")
     args = parser.parse_args()
     source = args.source.resolve()
@@ -126,6 +134,7 @@ def main() -> int:
         # platform.h disagree with the pinned release.
         f"-DNCNN_VERSION={source_version(source)}",
         f"-DNCNN_VULKAN={'ON' if args.vulkan else 'OFF'}",
+        f"-DNCNN_SHARED_LIB={'ON' if args.link_kind == 'shared' else 'OFF'}",
     ]
     if args.vulkan:
         # System glslang keeps the build reproducible; the vendored tree has no glslang.

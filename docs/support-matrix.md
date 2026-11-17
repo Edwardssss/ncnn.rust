@@ -105,6 +105,7 @@ GitHub-hosted runners cover these configurations without additional hardware:
 | macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
 | macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
 | Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1 |
+| Static link | `ubuntu-latest` | `tools/build-ncnn-sdk.py --link-kind static` and the workspace suite with `NCNN_LINK_KIND=static`, which no other job exercises |
 | Semver | `ubuntu-latest` | `cargo semver-checks check-release` for both packages against the published release |
 | Documentation links | `ubuntu-latest` | `lychee --offline --include-fragments` over the Markdown pages, which resolves local files and anchors without network access |
 | Vulkan | `ubuntu-latest` | The whole conformance suite plus the Vulkan contracts against Mesa lavapipe with `NCNN_TEST_DEVICE=vulkan`, the Vulkan-gated Clippy pass, and both device examples |

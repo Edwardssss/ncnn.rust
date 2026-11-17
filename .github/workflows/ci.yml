@@ -161,6 +161,45 @@ jobs:
           EOF
           cargo publish -p ncnn-rust --dry-run --allow-dirty --config "$RUNNER_TEMP/patch.toml"
 
+  # `NCNN_LINK_KIND` selects static by default and every other job links a shared SDK, so
+  # this is the only place the static path runs: the `NCNN_STATIC_DEFINE` define, the
+  # `static=ncnn` link and the layout inference the SDK without a DLL exercises.
+  static:
+    name: Static link (Linux x86-64)
+    runs-on: ubuntu-latest
+    env:
+      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-static
+      NCNN_LINK_KIND: static
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache static ncnn SDK
+        id: sdk-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.NCNN_INSTALL_DIR }}
+          key: ncnn-static-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev
+          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
+          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
+
+      - name: Build a static ncnn SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 tools/fetch-ncnn.py
+          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}" --link-kind static
+
+      # Every other job points LD_LIBRARY_PATH at a shared SDK; a static link resolves
+      # nothing at run time, which is the property this job proves.
+      - name: Test against the static library
+        run: cargo test --workspace
+
   # The publish gate compiles the archive, and this job consumes it: a separate crate
   # depends on the packaged files, which is the only path that sees the published
   # manifest, the packaged file list and the runtime library lookup a user gets.
