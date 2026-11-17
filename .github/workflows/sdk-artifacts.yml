@@ -69,7 +69,9 @@ jobs:
 
       # The archive keeps paths relative to the install prefix, which is the layout
       # tools/install-sdk.py validates after unpacking. Git Bash hands backslash paths to
-      # bash, so the prefix is normalised before it is used as a directory.
+      # bash, so the prefix is normalised before it is used as a directory, and the archive
+      # is written under a relative name because GNU tar reads the drive letter in a `-f`
+      # path as a remote host.
       - name: Pack the SDK
         shell: bash
         run: |
@@ -80,11 +82,13 @@ jobs:
           for directory in include lib lib64 bin; do
             if [ -d "$directory" ]; then directories+=("$directory"); fi
           done
-          asset="$GITHUB_WORKSPACE/ncnn-rust-sdk-${{ env.NCNN_VERSION }}-${{ matrix.platform }}.tar.gz"
-          tar -czf "$asset" "${directories[@]}"
+          asset="ncnn-rust-sdk-${{ env.NCNN_VERSION }}-${{ matrix.platform }}.tar.gz"
+          cd "$RUNNER_TEMP"
+          tar -czf "$asset" -C "$root" "${directories[@]}"
           # `head` would close the pipe and let SIGPIPE fail `tar` under `pipefail`.
           tar -tzf "$asset" | sed -n '1,20p'
           ls -l "$asset"
+          mv "$asset" "$GITHUB_WORKSPACE/$asset"
 
       - uses: actions/upload-artifact@v4
         with:
