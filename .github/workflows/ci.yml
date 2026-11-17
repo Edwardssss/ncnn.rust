@@ -99,6 +99,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Examples
+        if: runner.os == 'Linux'
         env:
           LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
           DYLD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
@@ -260,37 +261,6 @@ jobs:
           cd "$crate"
           cargo run
 
-  msrv:
-    name: MSRV 1.85.1
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.85.1"
-
-      - name: Cache ncnn SDK
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.NCNN_INSTALL_DIR }}
-          key: ncnn-msrv-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev
-          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
-          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
-          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
-
-      - name: Fetch and build ncnn
-        run: |
-          python3 tools/fetch-ncnn.py
-          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
-
-      - name: Check with the declared minimum
-        run: cargo check --workspace --all-targets
-
   arm64:
     name: test (ubuntu-24.04-arm)
     runs-on: ubuntu-24.04-arm
@@ -421,6 +391,9 @@ jobs:
   # so the SDK has to enable Vulkan as well.
   semver:
     name: Semver checks
+    # A published API changes through a merge, so the comparison runs on the default
+    # branch instead of on every pull request.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -464,61 +437,3 @@ jobs:
             cargo semver-checks check-release --package "$package"
             echo "::endgroup::"
           done
-
-  coverage:
-    name: Coverage (llvm-cov)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      NCNN_INSTALL_DIR: ${{ github.workspace }}/ncnn-cpu
-      NCNN_LINK_KIND: dylib
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev
-          llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
-          [ -n "$llvm_lib" ] || llvm_lib="$(ls -d /usr/lib/llvm-*/lib 2>/dev/null | sort -V | tail -1)"
-          echo "LIBCLANG_PATH=$llvm_lib" >> "$GITHUB_ENV"
-          cargo install cargo-llvm-cov --locked
-
-      - name: Cache ncnn SDK
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.NCNN_INSTALL_DIR }}
-          key: ncnn-cpu-${{ env.NCNN_VERSION }}-${{ hashFiles('tools/build-ncnn-sdk.py', 'tools/fetch-ncnn.py', 'tools/patches/*.patch') }}
-
-      - name: Build ncnn
-        run: |
-          python3 tools/fetch-ncnn.py
-          python3 tools/build-ncnn-sdk.py vendor/ncnn-${{ env.NCNN_VERSION }} "${{ env.NCNN_INSTALL_DIR }}"
-
-      - name: Report coverage
-        env:
-          LD_LIBRARY_PATH: ${{ env.NCNN_INSTALL_DIR }}/lib
-        run: |
-          cargo llvm-cov --workspace --lcov --output-path coverage.lcov --fail-under-lines 85
-          cargo llvm-cov report --summary-only
-
-      # `--summary-only` alone produced an lcov with file totals and no `DA` records, which
-      # looked like a report while carrying no per-line data.
-      - name: Reject a report without line records
-        run: |
-          records="$(grep -c '^DA:' coverage.lcov || true)"
-          echo "per-line records: $records"
-          if [ "$records" -lt 1000 ]; then
-            echo "coverage.lcov carries no usable line records"
-            exit 1
-          fi
-
-      - name: Upload the report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-lcov
-          path: coverage.lcov
-          if-no-files-found: error

@@ -74,6 +74,11 @@ The `main` ruleset requires one approving review, a resolved review thread per f
 repository administrators can bypass the ruleset. External contributions therefore need a
 maintainer approval before they land.
 
+`MSRV 1.85.1` runs on every request, but it builds an SDK and checks the workspace only when a
+manifest, the lockfile or `rust-toolchain.toml` changed, so a code-only change still reports the
+check without paying for it. The semver comparison runs on a push to `main`, and coverage runs on
+the weekly schedule; neither is a merge gate.
+
 Dependency updates merge without a maintainer: `.github/workflows/dependabot-auto-merge.yml`
 approves patch and minor Dependabot pull requests and arms auto-merge, which completes once the
 required checks pass. Major updates wait for a maintainer. The Dependabot app holds a
@@ -116,9 +121,10 @@ requests.
 
 `rust-toolchain.toml` pins the stable channel with `rustfmt` and `clippy`; the MSRV job pins
 1.85.1 separately, so code that relies on a newer language feature breaks that job even when the
-local stable toolchain accepts it. `.gitattributes` normalises text files to LF and marks native
-binaries. Do not reflow unrelated code in a functional change, and do not disable a lint without
-documenting the reason next to it.
+local stable toolchain accepts it; that job builds its SDK and checks the workspace only when a
+manifest, the lockfile or `rust-toolchain.toml` moves. `.gitattributes` normalises text files to LF
+and marks native binaries. Do not reflow unrelated code in a functional change, and do not disable
+a lint without documenting the reason next to it.
 
 ## Documentation
 

@@ -107,12 +107,12 @@ GitHub-hosted runners cover these configurations without additional hardware:
 | Linux ARM64 CPU | `ubuntu-24.04-arm` | Native workspace tests |
 | macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
 | macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
-| Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1 |
+| Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1, on a change to a manifest, the lockfile or `rust-toolchain.toml` |
 | Static link | `ubuntu-latest` | `tools/build-ncnn-sdk.py --link-kind static` and the workspace suite with `NCNN_LINK_KIND=static`, which no other job exercises |
-| Semver | `ubuntu-latest` | `cargo semver-checks check-release` for both packages against the published release |
+| Semver | `ubuntu-latest` | `cargo semver-checks check-release` for both packages against the published release, on a push to the default branch |
 | Documentation links | `ubuntu-latest` | `lychee --offline --include-fragments` over the Markdown pages, which resolves local files and anchors without network access |
 | Vulkan | `ubuntu-latest` | The whole conformance suite plus the Vulkan contracts against Mesa lavapipe with `NCNN_TEST_DEVICE=vulkan`, the Vulkan-gated Clippy pass, and both device examples |
-| Coverage | `ubuntu-latest` | `cargo llvm-cov` line coverage of the wrapper, uploaded as an artifact |
+| Coverage | `ubuntu-latest` | `cargo llvm-cov` line coverage of the wrapper on the weekly schedule, uploaded as an artifact |
 | Parser fuzzing | `ubuntu-latest` nightly schedule | `cargo fuzz` on the text parameter loader, the bounded weight reader, the pixel view and the typed tensor paths |
 | API documentation | `ubuntu-latest` | `cargo doc --workspace --no-deps` with a built SDK, deployed to <https://edwardssss.github.io/ncnn.rust/> |
 
