@@ -110,3 +110,12 @@ pub fn version_number() -> i32 {
 pub fn cpu_count() -> usize {
     unsafe { sys::ncnn_rs_cpu_count().max(1) as usize }
 }
+
+/// Compiles the crate README's examples, which is the page crates.io publishes.
+///
+/// The item exists only while doctests run, so it adds nothing to the API. Without it the package
+/// README can describe methods that no longer exist, which is a failure a reader would hit before
+/// they reach the API reference.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeExamples;

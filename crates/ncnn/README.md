@@ -1,8 +1,8 @@
 # ncnn-rust
 
 Rust CPU and optional Vulkan inference interfaces for an externally installed ncnn 20261020 SDK.
-The companion `ncnn-rust-sys` package provides raw bindings and C ABI adapters; this package
-re-exports them as `ncnn_rust::sys`.
+The companion `ncnn-rust-sys` package provides raw bindings and C ABI adapters; the `raw` feature
+re-exports them as `ncnn_rust::sys`, and the default build publishes no generated bindings.
 
 ## Install
 
@@ -49,10 +49,10 @@ fn main() -> ncnn_rust::Result<()> {
 views borrow their tensor and expose logical initialized data: `Mat::channel`, `channel_range`,
 `depth`, `depth_range`, `column_range`, `row_range`, `batch` and `batch_range` return a `MatView`
 that aliases the source storage, so the slice readers borrow it and the copying readers, like
-`to_f32`, copy out of it; `Extractor::input` copies a view as well. `Net::infer_view_into` reads the
-region where it lives and appends the outputs to a caller buffer, which is the zero-copy form for a
-model that takes a crop, a channel or one batch item. `input` transfers crate-owned storage;
-raw-adopted inputs are copied so external storage dependencies stay with the caller.
+`to_f32`, copy out of it; `Extractor::input` copies a view as well. `Input::view` reads the region
+where it lives and `Net::infer_into` appends the outputs to a caller buffer, which is the zero-copy
+form for a model that takes a crop, a channel or one batch item. `input` transfers crate-owned
+storage; raw-adopted inputs are copied so external storage dependencies stay with the caller.
 
 Batched storage is built with `Mat::from_f32_batch`, and `TensorInfo::n` reports the batch count.
 `Mat::into_normalized` and `Mat::into_reshape` consume a tensor the caller no longer needs, which lets
@@ -64,32 +64,21 @@ borrowed:
 
 ```rust,no_run
 # fn run(net: &ncnn_rust::Net) -> ncnn_rust::Result<()> {
+use ncnn_rust::TensorWidth;
+
 let mut ex = net.extractor()?;
 ex.input("input", ncnn_rust::Mat::from_f32(&[1., 2., 3.], &[3])?)?;
-let output = ex.extract("output")?;
+let output = ex.extract("output", TensorWidth::Fp32)?;
 println!("{:?}", output.channel_f32(0)?);
 # Ok(())
 # }
 ```
 
-Multiple inputs transfer in order with `inputs`. Multiple outputs can be consumed sequentially with
-`outputs_with`; each callback borrows one guard and releases it before the next extraction:
-
-```rust,no_run
-# fn run(net: &ncnn_rust::Net, a: ncnn_rust::Mat, b: ncnn_rust::Mat) -> ncnn_rust::Result<()> {
-let mut ex = net.extractor()?;
-ex.inputs([("a", a), ("b", b)])?;
-ex.outputs_with(&["sum", "product"], |name, output| {
-    println!("{name}: {:?}", output.channel_f32(0)?);
-    Ok(())
-})?;
-# Ok(())
-# }
-```
-
-Both methods stop at the first error; earlier inputs or callbacks remain applied. `Mat::from_f32`
-copies the source slice into owned storage, and `inputs` adds no wrapper tensor copy for that
-storage. `outputs_with` adds no detached tensor copy, and `to_f32` explicitly copies logical values.
+Several inputs and outputs are the same two calls in a loop: submit each input with `input` and read
+each output with `extract`, `extract_mat` or `extract_into`. The caller therefore owns the error
+policy, and a failure names the endpoint it happened at. `Mat::from_f32` copies the source slice into
+owned storage, `input` adds no wrapper tensor copy for that storage, and `to_f32` explicitly copies
+logical values.
 
 `OutputGuard` exposes checked immutable views and explicit FP32 vector copying; it exposes no raw or
 owned tensor handle. Drop the guard, or end its scope, before reusing its extractor, including when
@@ -97,7 +86,9 @@ the guard is otherwise unused. `Endpoint::Index` selects a blob by index. Native
 precision conversion and local-pool detachment still apply, and the caller selects FP32
 interpretation according to the model. Raw-handle export, options whose raw handle was exported
 before configuration, native path model loading and custom-layer registration disable guard
-extraction. Detached extraction remains available for advanced allocator and callback workflows.
+extraction. `extract_mat` and `OutputGuard::into_mat` are the owned forms: they keep the buffer the
+native extractor already detached, and copy only when the storage cannot be owned, which is a pooled
+network or an input the caller still owns.
 
 For repeated inference, resolve endpoints once and fill one reusable vector:
 
@@ -137,8 +128,8 @@ on the thread that created them, which makes one pair per worker the scaling uni
 `crates/ncnn/examples/threads.rs` measures that against a single network over every core.
 
 Quantized and half-precision outputs keep the width the producing layer wrote. `Net::infer_stored`
-returns `TensorInfo` and `Mat`, `Extractor::extract_stored` borrows one for the extractor scope and
-`Extractor::extract_stored_owned` returns independent storage, all readable through
+returns `TensorInfo` and `Mat`, and `Extractor::extract` or `extract_mat` with
+`TensorWidth::Stored` reads one without FP32 conversion; both are readable through
 `Mat::to_f32_typed(kind)` or `Mat::to_i8()`. `Mat::from_typed` and `Mat::from_i8` build the same
 storage for an input side, and `ElementKind` names each format. `infer` converts to FP32 and stays
 the form for models that end in FP32.
