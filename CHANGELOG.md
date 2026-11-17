@@ -16,6 +16,12 @@ library upgrade is a minor change of this crate.
 - `api_benchmark` gained the `owned-mat`, `guard-into`, `native-buffer` and `native-owned` modes.
 - A `raw` feature exposes the generated bindings as `ncnn_rust::sys`. The default build no longer
   publishes them, so the crate's default surface carries no generated C ABI.
+- Prebuilt SDK archives on the `sdk-20261020` release: one shared-library
+  `ncnn-rust-sdk-20261020-<platform>.tar.gz` each for `linux-x64-cpu`, `linux-x64-vulkan`,
+  `windows-x64-cpu` and `macos-arm64-cpu`, next to a `SHA256SUMS` file. `tools/install-sdk.py`
+  installs one and checks it against that digest and against the release stamped in
+  `include/ncnn/platform.h`, so a machine needs neither CMake, glslang nor a C++ build of ncnn, and
+  `--list` prints the platform names.
 
 ### Changed
 
