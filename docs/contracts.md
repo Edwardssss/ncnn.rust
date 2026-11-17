@@ -243,7 +243,8 @@ payload hash corruption. FP32 extractor guards remain CPU-only; stored extractio
 networks.
 
 `NCNN_TEST_DEVICE=vulkan` attaches the default device to every conformance fixture, so the operator
-families, the graph pairs and every layer case repeat on the GPU. One contract compares
+families, the graph pairs and every layer case (see [layer coverage](layer-coverage.md)) repeat on the
+GPU. One contract compares
 `Convolution`, `ConvolutionDepthWise` and `InnerProduct` with int8 weights, whose scale pushes `0.25`
 below one quantization step, against the float run on the host and against the device and
 resident-recording results. It also reads the quantized bytes back through stored extraction, both

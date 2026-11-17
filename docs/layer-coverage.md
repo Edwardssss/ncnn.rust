@@ -18,6 +18,8 @@ wrapper regressions without a second backend.
   strided; interpolation nearest and bilinear; Gemm shape; softmax on three axes.
 - `graphs.rs` covers multi-input, split/concat, residual, pool/split/interp/concat and
   multi-output topologies, plus repeated-run determinism and packing/FP16 option parity.
+- `layers.rs` holds the 56 layer cases the registered-type list needs. They run inside one test
+  function so a failing type is named in the aggregate message instead of as a separate binary.
 - `allocation.rs` asserts that the reusable-buffer path allocates nothing once warm.
 - `api.rs` reaches the public paths the families do not: file loading, custom readers, parameter
   dictionaries, unchecked reads, reshape views, the three endpoint forms and concatenated outputs.
