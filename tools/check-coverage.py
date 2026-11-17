@@ -21,7 +21,17 @@ else:
         target = root / target
     if args.target:
         target /= args.target
-    outputs = sorted((target / 'debug/build').glob('ncnn-rust-sys-*/out/bindings.rs'), key=lambda p: p.stat().st_mtime)
+    # Cargo has written build script output under both `<package>-<hash>/out` and
+    # `<package>/<hash>/out`, so match the package name instead of one directory layout.
+    build = target / 'debug/build'
+    outputs = sorted(
+        (
+            path
+            for path in build.glob('**/bindings.rs')
+            if any(part.startswith('ncnn-rust-sys') for part in path.parts)
+        ),
+        key=lambda p: p.stat().st_mtime,
+    )
     if not outputs:
         raise SystemExit("Build ncnn-rust-sys before checking coverage or pass --bindings")
     bindings = outputs[-1]
