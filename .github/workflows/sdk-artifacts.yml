@@ -82,7 +82,8 @@ jobs:
           done
           asset="$GITHUB_WORKSPACE/ncnn-rust-sdk-${{ env.NCNN_VERSION }}-${{ matrix.platform }}.tar.gz"
           tar -czf "$asset" "${directories[@]}"
-          tar -tzf "$asset" | head -n 20
+          # `head` would close the pipe and let SIGPIPE fail `tar` under `pipefail`.
+          tar -tzf "$asset" | sed -n '1,20p'
           ls -l "$asset"
 
       - uses: actions/upload-artifact@v4
