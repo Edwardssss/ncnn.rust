@@ -79,13 +79,13 @@ Windows host, pinned to one core, minimum of three runs re-measured on 2026-11-1
 | `to_pixels` | 38.4 | |
 | `warp_affine` | 255.9 | bilinear, full frame |
 
-`normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one pass
-over the destination, so the copying form costs about what a bare `deep_clone` costs instead of a
-clone followed by a native layer that walks the buffer again. Allocation and first touch dominate
+`normalized` and `normalize_in_place` apply the scale and bias of the native `Scale` path in one
+pass over the destination, so the copying form costs about what a bare `deep_clone` costs instead of
+a clone followed by a native layer that walks the buffer again. Allocation and first touch dominate
 every row that allocates: `deep_clone` moved between 18.6 and 25.2 us across the three runs on a
-shared host, and the same host moved these medians by three times until the process was pinned to one
-core, which is why the table reports a minimum over runs. CI runs the same command in a debug build as
-a smoke check, so its printed medians verify the path rather than the timings.
+shared host, and the same host moved these medians by three times until the process was pinned to
+one core, which is why the table reports a minimum over runs. CI runs the same command in a debug
+build as a smoke check, so its printed medians verify the path rather than the timings.
 
 GPU lifecycle: allocator create/drop 0.330 us, upload-download-drop 577.283 us, cache save
 914.730 us, cache load 331.940 us. Seven randomized cold/warm process pairs report first-request
