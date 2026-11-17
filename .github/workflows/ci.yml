@@ -113,6 +113,54 @@ jobs:
           cargo run -p ncnn-rust --example heap_retention
           cargo run -p ncnn-rust --example threads
 
+      # tools/install-sdk.py is the documented way to obtain a prebuilt SDK, so its checks run
+      # against an archive this job just built rather than against the published release. The
+      # archive is packed the way the SDK artifacts workflow packs it, so a layout change that
+      # breaks the installer fails here.
+      - name: Installer smoke test
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          python="${{ steps.python.outputs.cmd }}"
+          installer="$GITHUB_WORKSPACE/tools/install-sdk.py"
+          version="${{ env.NCNN_VERSION }}"
+          "$python" "$installer" --list
+
+          cd "$NCNN_INSTALL_DIR"
+          directories=()
+          for directory in include lib lib64 bin; do
+            if [ -d "$directory" ]; then directories+=("$directory"); fi
+          done
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist"
+          asset="$dist/ncnn-rust-sdk-$version-linux-x64-cpu.tar.gz"
+          tar -czf "$asset" "${directories[@]}"
+          ( cd "$dist" && sha256sum ncnn-rust-sdk-*.tar.gz > SHA256SUMS )
+
+          "$python" "$installer" --platform linux-x64-cpu \
+            --dest "$RUNNER_TEMP/installed" --base-url "file://$dist"
+          test -f "$RUNNER_TEMP/installed/include/ncnn/platform.h"
+
+          # An archive whose checksum matches but whose platform.h names another release fails
+          # the version check after unpacking, so it is the case that proves the staging prefix
+          # is removed instead of being left half installed.
+          broken="$RUNNER_TEMP/broken"
+          mkdir -p "$broken"
+          for directory in "${directories[@]}"; do
+            cp -r "$NCNN_INSTALL_DIR/$directory" "$broken/"
+          done
+          sed -i 's/^#define NCNN_VERSION_NUMBER .*/#define NCNN_VERSION_NUMBER 19700101/' \
+            "$broken/include/ncnn/platform.h"
+          tar -czf "$asset" -C "$broken" "${directories[@]}"
+          ( cd "$dist" && sha256sum ncnn-rust-sdk-*.tar.gz > SHA256SUMS )
+          if "$python" "$installer" --platform linux-x64-cpu \
+            --dest "$RUNNER_TEMP/rejected" --base-url "file://$dist"; then
+            echo "installer accepted an archive for another release" >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/rejected"
+          test ! -e "$RUNNER_TEMP/rejected.partial"
+
       # A second pass catches state that only breaks after the first one.
       - name: Repeat the suite
         if: runner.os == 'Linux'

@@ -101,13 +101,14 @@ GitHub-hosted runners cover these configurations without additional hardware:
 
 | Configuration | Runner | What the job proves |
 |---|---|---|
-| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, the workspace suite twice, the CPU examples, `cargo doc -D warnings`, generated model fixtures against a native reference, package verification |
+| Linux x86-64 CPU | `ubuntu-latest` | Format, Clippy, the workspace suite twice, the CPU examples, `cargo doc -D warnings`, generated model fixtures against a native reference, package verification, and `tools/install-sdk.py` against an archive the job packs itself |
 | Windows x86-64 CPU | `windows-latest` | MSVC build, workspace tests, example, package verification |
 | Linux ARM64 CPU | `ubuntu-24.04-arm` | Native workspace tests |
 | macOS x86-64 CPU | `macos-15-intel` | libc++ build and workspace tests on Intel |
 | macOS ARM64 CPU | `macos-15` | Apple Silicon build and workspace tests |
 | Minimum Rust | `ubuntu-latest` | `cargo check --workspace --all-targets` at 1.85.1, on a change to a manifest, the lockfile or `rust-toolchain.toml` |
 | Static link | `ubuntu-latest` | `tools/build-ncnn-sdk.py --link-kind static` and the workspace suite with `NCNN_LINK_KIND=static`, which no other job exercises |
+| SDK archives | `ubuntu-latest`, `windows-latest`, `macos-15` | The four `ncnn-rust-sdk-*` archives and their `SHA256SUMS`, published as the `sdk-<version>` release on a dispatch or an `sdk-*` tag |
 | Semver | `ubuntu-latest` | `cargo semver-checks check-release` for both packages against the published release, on a push to the default branch |
 | Documentation links | `ubuntu-latest` | `lychee --offline --include-fragments` over the Markdown pages, which resolves local files and anchors without network access |
 | Vulkan | `ubuntu-latest` | The whole conformance suite plus the Vulkan contracts against Mesa lavapipe with `NCNN_TEST_DEVICE=vulkan`, the Vulkan-gated Clippy pass, and both device examples |
