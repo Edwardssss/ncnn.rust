@@ -1,50 +1,7 @@
-//! CPU inference and optional synchronous Vulkan inference with explicit ownership.
+//! The crate documentation is the package README, so the page crates.io renders and the page
+//! rustdoc builds cannot drift apart: one file answers both.
 //!
-//! [`Net`] owns a loaded graph, [`Extractor`] runs one request, and [`Mat`] holds tensor
-//! storage. Owned input removes the aliasing question at the API boundary: [`Net::infer`]
-//! returns independent vectors and [`Extractor::extract`] borrows a scored CPU output.
-//!
-//! A request has one storage decision per side. [`Extractor::extract`] borrows a read-only guard and
-//! [`TensorWidth`] selects FP32 conversion or the stored width, [`Extractor::extract_mat`] keeps an
-//! owned tensor, [`Extractor::extract_into`] appends to a caller vector and
-//! [`Extractor::extract_owned`] returns values. [`Net::infer`] takes an [`Input`], which carries the
-//! same choice on the input side: owned storage, borrowed FP32 values or a tensor sub view.
-//!
-//! One extractor serves repeated requests: [`Extractor::input`] restarts the native handle once a
-//! request extracted, so a second request recomputes instead of returning the cached answer, and
-//! [`Extractor::continue_session`] keeps that cache when a graph carries state across inputs. A
-//! tensor exposes read-only sub views ([`Mat::channel`], [`Mat::row_range`] and their siblings),
-//! which alias its storage: the slice readers borrow it, and the copying readers and the submit path
-//! copy out of it.
-//!
-//! The forms that return independent storage allocate and free an output-sized buffer per request,
-//! which is the dominant cost of a small request on a host whose heap returns freed pages to the
-//! kernel. [`heap::retain_pages`] keeps those pages mapped on glibc Linux,
-//! [`Net::infer_into`] removes the allocation by reusing a caller buffer, and
-//! [`NetBuilder::reuse_blob_memory`] gives the network's intermediate tensors a pool it owns.
-//!
-//! ```compile_fail
-//! let net = ncnn_rust::Net::new().unwrap();
-//! std::thread::spawn(move || drop(net));
-//! ```
-//!
-//! ```compile_fail
-//! let ex;
-//! {
-//!     let net = ncnn_rust::Net::new().unwrap();
-//!     ex = net.extractor().unwrap();
-//! }
-//! drop(ex);
-//! ```
-//!
-//! ```compile_fail
-//! let layer;
-//! {
-//!     let net = ncnn_rust::Net::new().unwrap();
-//!     layer = net.layer_handle(0).unwrap();
-//! }
-//! drop(layer);
-//! ```
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 pub mod alloc;
@@ -110,12 +67,3 @@ pub fn version_number() -> i32 {
 pub fn cpu_count() -> usize {
     unsafe { sys::ncnn_rs_cpu_count().max(1) as usize }
 }
-
-/// Compiles the crate README's examples, which is the page crates.io publishes.
-///
-/// The item exists only while doctests run, so it adds nothing to the API. Without it the package
-/// README can describe methods that no longer exist, which is a failure a reader would hit before
-/// they reach the API reference.
-#[cfg(doctest)]
-#[doc = include_str!("../README.md")]
-pub struct ReadmeExamples;

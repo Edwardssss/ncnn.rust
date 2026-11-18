@@ -45,6 +45,19 @@ fn main() -> ncnn_rust::Result<()> {
 }
 ```
 
+A request has one storage decision per side. On an extractor, `TensorWidth` selects FP32 conversion
+or the width the layer wrote:
+
+| Form | Storage |
+|---|---|
+| `extract(endpoint, width)` | borrowed read-only guard, which reserves the network until it drops |
+| `extract_mat(endpoint, width)` | owned native tensor, without a second copy on the default pool |
+| `extract_into(endpoint, buffer)` | appended to a caller vector that keeps its capacity |
+| `extract_owned(endpoint)` | independent FP32 values |
+
+`Net::infer`, `infer_stored` and `infer_into` take an `Input`, which carries the same choice on the
+input side: owned storage, borrowed FP32 values or a tensor sub view.
+
 `PixelImage` checks color formats, stride and ROI before conversion or resizing. Read-only tensor
 views borrow their tensor and expose logical initialized data: `Mat::channel`, `channel_range`,
 `depth`, `depth_range`, `column_range`, `row_range`, `batch` and `batch_range` return a `MatView`
@@ -134,7 +147,35 @@ returns `TensorInfo` and `Mat`, and `Extractor::extract` or `extract_mat` with
 storage for an input side, and `ElementKind` names each format. `infer` converts to FP32 and stays
 the form for models that end in FP32.
 
-MSRV: Rust 1.85.1. License: BSD-3-Clause. Native ncnn retains its upstream license.
+## Thread affinity
+
+A network, its extractor and its tensors stay on the thread that created them: the handles are not
+`Send` or `Sync` because native allocation, packing and the allocator a tensor came from are
+thread-affine. One network and extractor pair per worker is therefore the scaling unit, and
+`crates/ncnn/examples/threads.rs` measures that against a single network over every core.
+
+```rust,compile_fail
+let net = ncnn_rust::Net::new().unwrap();
+std::thread::spawn(move || drop(net));
+```
+
+```rust,compile_fail
+let ex;
+{
+    let net = ncnn_rust::Net::new().unwrap();
+    ex = net.extractor().unwrap();
+}
+drop(ex);
+```
+
+```rust,compile_fail
+let layer;
+{
+    let net = ncnn_rust::Net::new().unwrap();
+    layer = net.layer_handle(0).unwrap();
+}
+drop(layer);
+```
 
 ## Optional Vulkan
 
@@ -168,3 +209,7 @@ CPU. Returning an owned vector per request instead costs one output copy, which 
 NanoDet Vulkan gap of 18% comes from. `extract_mat` and `OutputGuard::into_mat` return an owned
 tensor without that copy: the native extractor already detaches its output from the network's blob
 pool, and these forms keep that buffer.
+
+## Versions
+
+MSRV: Rust 1.85.1. License: BSD-3-Clause. Native ncnn retains its upstream license.
