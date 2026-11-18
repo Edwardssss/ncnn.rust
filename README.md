@@ -233,8 +233,8 @@ request through the C API and hands the tensor back where the engine left it:
 
 | Form | native | ncnn-rust | Delta |
 |---|---:|---:|---:|
-| owned input, borrowed output view | 10.422 | 10.930 | +5% |
-| owned input, zero-copy owned output | 10.422 | 11.124 | +7% |
+| owned input, borrowed output view | 10.335 | 10.614 | +3% |
+| owned input, zero-copy owned output | 10.335 | 10.356 | within spread |
 
 Both rows keep the result in the buffer the extractor already detached, so the wrapper adds the call
 and the endpoint resolution and nothing else. `Extractor::input` consumes the tensor, which releases
@@ -243,8 +243,8 @@ blocks the light-mode reuse of that buffer and costs twenty times as much on the
 wrapper's fast shape is also its default shape.
 
 The forms that ask for a copy pay for one. A value vector per request allocates 256 KB on top of the
-native clone that `Extractor::extract` already performs, which costs 226 us on the guest against the
-10.9 us above, and a cloned input and output allocate two such buffers.
+native clone that `Extractor::extract` already performs, which costs 218 us on the guest against the
+10.6 us above, and a cloned input and output allocate two such buffers.
 [Performance](docs/performance.md) records both with their allocation counts, the native C
 references they compare against, and the glibc and NT heap behaviour that decides what a fresh 256
 KB buffer costs. That is why the reuse forms exist: `NetBuilder::reuse_blob_memory()` moves the

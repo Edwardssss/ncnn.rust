@@ -106,19 +106,19 @@ Linux column is the median and the Windows column is the lowest run.
 
 | Mode | Windows ns | Linux ns | Rust allocations per request |
 |---|---:|---:|---:|
-| `native-request` (borrowed input, caller buffer) | 25586 | 23804 | none |
-| `native-buffer` (owned input, caller buffer) | 18764 | 18200 | none |
-| `native-owned` (owned input, read in place) | 12050 | 10422 | none |
-| `owned-guard` (owned input, borrowed output) | 12209 | 10930 | 2 small |
-| `guard-into` (guard consumed into an owned tensor) | 12197 | 10784 | 2 small |
-| `owned-mat` (owned input, zero-copy owned output) | 12927 | 11124 | 2 small |
-| `resolved-reused` (endpoint tokens, caller buffer) | 20121 | 18040 | 0 |
-| `borrowed-reused` (borrowed input, caller buffer) | 26404 | 23908 | 5 x 123 B |
+| `native-request` (borrowed input, caller buffer) | 25586 | 26569 | none |
+| `native-buffer` (owned input, caller buffer) | 18764 | 16555 | none |
+| `native-owned` (owned input, read in place) | 12050 | 10335 | none |
+| `owned-guard` (owned input, borrowed output) | 12209 | 10614 | 2 small |
+| `guard-into` (guard consumed into an owned tensor) | 12197 | 10704 | 2 small |
+| `owned-mat` (owned input, zero-copy owned output) | 12927 | 10356 | 2 small |
+| `resolved-reused` (endpoint tokens, caller buffer) | 20121 | 16812 | 0 |
+| `borrowed-reused` (borrowed input, caller buffer) | 26404 | 23387 | 5 x 34 B |
 
 The two modes that allocate a data buffer per request sit in a different regime, so they are listed
-separately with the guest's median: `owned-view` (owned value vector, one 262 KB vector) 226298 ns,
+separately with the guest's median: `owned-view` (owned value vector, one 262 KB vector) 218364 ns,
 and `copy` (cloned input and output, two 262 KB buffers plus the native clone of the input)
-497350 ns. On the Windows host the same two modes measured anywhere between 19573 and 143391 ns, and
+483315 ns. On the Windows host the same two modes measured anywhere between 19573 and 143391 ns, and
 between 386847 and 471300 ns: the heap alternates between recycled and freshly committed blocks, so a
 median there describes the host's page-commit state rather than the request path. The modes in the
 first table kept their ranking under the same alternation, and their spreads stayed inside a factor
@@ -152,7 +152,7 @@ KB in 5.6 to 6.4 us on the Windows host and 6 us on the guest, while allocating 
 buffer per request costs an order of magnitude more on a heap that returns freed pages to the
 kernel. Raising the glibc thresholds isolates the effect on the guest (default against
 `MALLOC_MMAP_THRESHOLD_=268435456` and `MALLOC_TRIM_THRESHOLD_=268435456`): `owned-view` drops from
-222878 ns to 16187 ns, `copy` from 489899 ns to 31019 ns, while `owned-guard` and `owned-mat` hold at
+214393 ns to 16347 ns, `copy` from 481801 ns to 28413 ns, while `owned-guard` and `owned-mat` hold at
 about 10.4 us because they allocate no data buffer. At 1024 elements, where the same buffers come
 from recycled chunks, the four modes collapse to 1128, 1134, 1265 and 1565 ns. Windows has no
 equivalent setting, so the host that cannot raise a threshold picks a reuse form or an allocator that
@@ -176,11 +176,11 @@ and reporting medians; 65536 elements, one core, three runs per host:
 
 | Form | WSL2 glibc, default | WSL2 glibc, pooled | Windows, default | Windows, pooled |
 |---|---:|---:|---:|---:|
-| `guard` (borrowed output) | 24232 to 29170 ns | 17352 to 17866 ns | 46250 ns | 22474 ns |
-| `extract_mat` (zero-copy owned output) | 23871 to 31283 ns | 23610 to 25118 ns | 47356 ns | 44354 ns |
-| `extract_owned` (owned value vector) | 29392 to 34542 ns | 24091 to 24962 ns | 98998 ns | 47087 ns |
-| `infer_into` (owned input, reused buffer) | 30697 to 31413 ns | 23589 to 23976 ns | 55282 ns | 29154 ns |
-| `infer_into`, borrowed input (borrowed input and buffer) | 22916 to 23433 ns | 16793 to 17920 ns | 29552 ns | 18502 ns |
+| `guard` (borrowed output) | 22726 to 25536 ns | 16954 to 17696 ns | 46250 ns | 22474 ns |
+| `extract_mat` (zero-copy owned output) | 22484 to 24457 ns | 22754 to 24687 ns | 47356 ns | 44354 ns |
+| `extract_owned` (owned value vector) | 28558 to 30588 ns | 22676 to 23874 ns | 98998 ns | 47087 ns |
+| `infer_into` (owned input, reused buffer) | 28564 to 30278 ns | 23276 to 24155 ns | 55282 ns | 29154 ns |
+| `infer_into`, borrowed input (borrowed input and buffer) | 21906 to 22769 ns | 16556 to 17347 ns | 29552 ns | 18502 ns |
 
 The guest values are the range of three runs and the Windows values the minimum of three runs.
 Rotating the cases warms the heap for every form, so the absolute figures here are lower than the
@@ -207,15 +207,15 @@ of three rounds, on the WSL2 guest with 8 logical cores:
 
 | Configuration | requests/s | us per request |
 |---|---:|---:|
-| one network, every core | 41.7k | 24.0 |
-| one network per worker, 1 worker | 37.6k | 26.6 |
-| one network per worker, 2 workers | 77.5k | 25.8 |
-| one network per worker, 4 workers | 104.6k | 38.2 |
+| one network, every core | 40.3k | 24.8 |
+| one network per worker, 1 worker | 40.6k | 24.6 |
+| one network per worker, 2 workers | 76.8k | 26.1 |
+| one network per worker, 4 workers | 105.9k | 37.8 |
 
 The native thread pool and one worker on one thread reach nearly the same per-request cost on a graph
 this small, where dispatch rather than arithmetic dominates; the pool neither wins nor loses.
-Independent workers then multiply the aggregate: four workers reach 2.8 times the single-worker
-throughput at 1.4 times the latency, because they share the cores. A graph whose layers are heavy
+Independent workers then multiply the aggregate: four workers reach 2.6 times the single-worker
+throughput at 1.5 times the latency, because they share the cores. A graph whose layers are heavy
 enough to amortize the dispatch cost moves the other way, so the choice is a measurement rather than
 a rule, and the example prints both forms for the graph an application uses. The 16-core Windows host
 showed the same ranking across three runs, 13k to 17k requests per second for one network over every
@@ -247,8 +247,8 @@ below, minimum of three rounds each:
 
 | Measurement | before | after `heap::retain_pages` |
 |---|---:|---:|
-| owned-output request (`infer`) | 255541 ns | 31754 ns |
-| borrowed-input, reused-buffer request | 23603 ns | 23912 ns |
+| owned-output request (`infer`) | 231369 ns | 28475 ns |
+| borrowed-input, reused-buffer request | 22710 ns | 22623 ns |
 
 The owned-output form drops by about eight times, and the reused-buffer form does not move, which is
 the same confirmation the allocator table gives. `cargo run --release -p ncnn-rust --example
@@ -257,9 +257,10 @@ setting, so the figures there differ only by host noise.
 
 The thresholds are glibc settings, and the same buffer pattern shows why Windows needs none of them.
 The example also prints `buffer_pair_ns`, the cost of allocating and freeing two output-sized
-buffers per round without a network: 203 us on the WSL2 guest above, and 15 to 24 us on the Windows
-host next to the recorded tables, where the heap serves the pattern from committed pages and faults
-almost nothing. `heap::retain_pages` therefore reports `false` on Windows, and the crate's own test
+buffers in one round without a network. It runs after `retain_pages`, so on the guest it reports
+the retained cost, 5.1 us; on the Windows host the call reports `false`, and there the same
+pattern costs 15 to 24 us because the heap serves it from committed pages and faults almost
+nothing. `heap::retain_pages` therefore reports `false` on Windows, and the crate's own test
 asserts both halves of that claim on whichever host runs the suite.
 
 ## Linux hosts
@@ -270,16 +271,16 @@ median of nine runs) reproduces the Windows ranking and shows the mechanism:
 
 | Mode | ns per request | Rust allocations per request |
 |---|---:|---:|
-| `native-request` | 23804 | none |
-| `native-buffer` | 18200 | none |
-| `native-owned` | 10422 | none |
-| `owned-guard` | 10930 | 2 small |
-| `guard-into` | 10784 | 2 small |
-| `owned-mat` | 11124 | 2 small |
-| `resolved-reused` | 18040 | 0 |
-| `borrowed-reused` | 23908 | 5 x 123 B |
-| `owned-view` | 226298 | 1 x 262 KB |
-| `copy` | 497350 | 2 x 262 KB |
+| `native-request` | 26569 | none |
+| `native-buffer` | 16555 | none |
+| `native-owned` | 10335 | none |
+| `owned-guard` | 10614 | 2 small |
+| `guard-into` | 10704 | 2 small |
+| `owned-mat` | 10356 | 2 small |
+| `resolved-reused` | 16812 | 0 |
+| `borrowed-reused` | 23387 | 5 x 34 B |
+| `owned-view` | 218364 | 1 x 262 KB plus 2 small |
+| `copy` | 483315 | 2 x 262 KB plus 2 small |
 
 The modes that borrow or reuse an output match the C API within a few percent; the mode that
 returns an owned value vector pays for page faults rather than for copies. A standalone probe of
@@ -291,17 +292,17 @@ fault count is the cost: 28803 minor faults over 300 iterations, about 2.1 us pe
 guest. Running the same two-buffer probe with `MALLOC_MMAP_THRESHOLD_=1073741824` and
 `MALLOC_TRIM_THRESHOLD_=-1` removes both the mapping round trip and the faults and brings it to
 9.4 us with 4 faults in total. The request path follows the same rule: `owned-view` allocates the
-output vector per request and lands at 226 us, `copy` allocates two data buffers plus the native
-clone and lands at 497 us, and setting the same two variables in the environment drops them to
-16.2 us and 31.0 us.
+output vector per request and lands at 218 us, `copy` allocates two data buffers plus the native
+clone and lands at 483 us, and setting the same two variables in the environment drops them to
+16.3 us and 28.4 us.
 
 Two conclusions follow. Reusing storage is the portable fix, and `infer_into` for owned and borrowed
 and `extract` already do that at native parity. Where an application cannot reuse, the heap decides:
 `heap::retain_pages` sets both thresholds from inside the process, a host that starts the process
 can set the same two variables instead, and an allocator that retains pages is the equivalent on a
-host whose heap has no such setting. A thread-caching allocator did not help on this guest (226 to
-235 us for `owned-view` with `MIMALLOC_PURGE_DELAY=-1` and `MIMALLOC_ARENA_EAGER_COMMIT=1`), so
-those two thresholds are the reliable lever there. The per-fault cost of a WSL2 guest is several
+host whose heap has no such setting. A thread-caching allocator did not help on this guest (231 to
+249 us for `owned-view` under `mimalloc` as the global allocator), so those two thresholds are the
+reliable lever there. The per-fault cost of a WSL2 guest is several
 times that of bare metal, so the absolute gap is smaller on a native Linux host, but the ranking and
 the mechanism are the same.
 
@@ -334,8 +335,15 @@ Those commands were re-run against the 0.4.0 API on 2026-11-17, nine runs per re
 three per helper, on the same Windows host. The ranking and the mechanism held; the absolute values
 sat 7 to 20% above the recorded campaign because the host carried other work at the time. The native
 references kept their order at 12.9, 20.6 and 26.7 us, the reuse forms followed at 14.3 to 20.7 us,
-and `owned-view` and `copy` stayed inside the Windows band recorded above at 22.3 us and 340 us. The
-guest columns were not re-run.
+and `owned-view` and `copy` stayed inside the Windows band recorded above at 22.3 us and 340 us.
+
+The guest columns were measured again on 2026-11-18 on the same WSL2 Debian guest: nine runs per
+request-path mode pinned to one core, three runs per helper, and every figure in this page's Linux
+tables comes from that campaign. It reproduced the mechanism. The four reuse forms stayed within a
+few percent of the native references, `owned-view` and `copy` landed at 218 us and 483 us, the two
+glibc thresholds moved them to 16.3 us and 28.4 us, and `mimalloc` did not move the owned form. The
+borrowed-input reference is the noisiest row on both hosts (24.6 to 30.0 us across the nine runs),
+so a few microseconds of movement there is host state rather than a wrapper change.
 
 Fourteen cases extend the highest-risk operators with parameter variants taken from the upstream
 tests: Convolution dilation, stride and activation; Pooling average, global and counted padding;
