@@ -62,6 +62,31 @@ vulkan` passed the 52 conformance cases, the four Vulkan contracts, the heap ret
 example printed the device line, `[5.0, 7.0, 9.0]` from a resident upload, and the pool allocator as
 32 bytes live against a 48-byte high-water mark.
 
+## Upstream status re-check
+
+Recorded on 2026-11-23 against ncnn master `6a57c05f0`, which is 26 commits past the pinned
+`20261020`; `20261020` is still the newest release tag, so no released ncnn carries a later fix.
+Each defect was rebuilt from source on the Windows host (MSVC 14.50, Vulkan SDK 1.4.363.0, RTX 3060)
+and re-run, then the pending fix was applied to the same tree and re-run again.
+
+| Defect | Master `6a57c05f0` | With the pending fix | Upstream |
+|---|---|---|---|
+| Light mode dereferences a null refcount for a caller-built input (`#1543`) | `0xC0000005` inside `extract`, nothing printed | PR #7270 alone: all four input/light-mode cases pass, exit 0 | Issue open, PR open |
+| `PriorBox_vulkan::upload_model` uploads an absent `aspect_ratios` (`#7259`) | `0xC0000094` (divide by zero) inside `load_model` | PR #7265: `load_model` returns 0 | Issue open, PR open |
+| `Cast_vulkan` declares Vulkan support for conversions without a shader | `0xC0000005` inside `extract` for fp32 to bf16, which the CPU layer implements | local cast-capability patch: `Net::layers` reports `support_vulkan=false`, the request falls back to the CPU layer and returns the bf16 bytes | No upstream issue filed |
+
+Three more behaviours are unchanged on master and are not covered by any pending PR: `Extractor`
+reuse answers the second request from the first request's blobs, `Extractor::clear()` leaves a handle
+that rejects every input, and light mode returns uninitialised values for a blob a second layer
+reads. The wrapper keeps working around all three, so none of them blocks the binding.
+
+Both local patches in `tools/patches/`, the `#7270` diff and the `#7265` diff still apply to
+`6a57c05f0` without conflicts, and `src/cpu.cpp`, `src/layer/vulkan/cast_vulkan.cpp` and
+`src/layer/vulkan/priorbox_vulkan.cpp` are byte-identical to `20261020`. The wide-CPU-ID sibling
+parser was re-checked with the same synthetic `thread_siblings_list` inputs: the upstream bitmask
+returns `{0,1}` for `32-33`, `{0}` for `64` and `{0}` for `1024`, while the string form the patch
+installs names every ID.
+
 ## Upstream light-mode defect
 
 The rejection that `Extractor::input_borrowed` applies to light mode guards a native defect. Recorded
